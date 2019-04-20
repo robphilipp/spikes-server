@@ -8,8 +8,6 @@ import akka.http.scaladsl.model.StatusCodes._
 import akka.http.scaladsl.model._
 import akka.http.scaladsl.server.Directives._
 import akka.http.scaladsl.server.Route
-//import akka.http.scaladsl.server.directives.MethodDirectives.get
-//import akka.http.scaladsl.server.directives.RouteDirectives.complete
 import akka.util.Timeout
 
 import scala.concurrent.duration._
@@ -19,7 +17,7 @@ trait StaticContentRoutes extends JsonSupport {
   // we leave these abstract, since they will be provided by the App
   implicit def system: ActorSystem
 
-  private lazy val log = Logging(system, classOf[StaticContentRoutes])
+  private lazy val log = Logging(system, getClass)
 
   // other dependencies that UserRoutes use
   def userRegistryActor: ActorRef
@@ -30,7 +28,6 @@ trait StaticContentRoutes extends JsonSupport {
   val workingDirectory: String = System.getProperty("user.dir")
 
   private def getExtensions(fileName: String): String = {
-
     val index = fileName.lastIndexOf('.')
     if (index != 0) {
       fileName.drop(index + 1)
@@ -39,7 +36,6 @@ trait StaticContentRoutes extends JsonSupport {
   }
 
   private def getDefaultPage = {
-
     val fullPath = List(Paths.get("static/index.html"), Paths.get("static/index.htm"))
     val res = fullPath.filter(x => Files.exists(x))
     if (res.nonEmpty)
@@ -48,7 +44,7 @@ trait StaticContentRoutes extends JsonSupport {
       Paths.get("")
   }
 
-  lazy val staticContentRoutes: Route = //path("static") {
+  lazy val staticContentRoutes: Route =
     logRequestResult("akka-http-server") {
       get {
         entity(as[HttpRequest]) { requestData =>
@@ -71,5 +67,4 @@ trait StaticContentRoutes extends JsonSupport {
         }
       }
     }
-  //  }
 }

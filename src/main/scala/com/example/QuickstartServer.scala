@@ -9,8 +9,13 @@ import akka.http.scaladsl.Http
 import akka.http.scaladsl.server.Route
 import akka.stream.ActorMaterializer
 import akka.http.scaladsl.server.Directives._
+import com.typesafe.config.ConfigFactory
 
 object QuickstartServer extends App with StaticContentRoutes with UserRoutes with RandomRoutes with AuctionRoutes {
+  // load the configuration
+  val config = ConfigFactory.parseResources("application.conf")
+  val hostname = config.getString("http.ip")
+  val port = config.getInt("http.port")
 
   // set up ActorSystem and other dependencies here
   implicit val system: ActorSystem = ActorSystem("helloAkkaHttpServer")
@@ -22,7 +27,7 @@ object QuickstartServer extends App with StaticContentRoutes with UserRoutes wit
 
   // from the UserRoutes trait
   lazy val routes: Route = userRoutes ~ randomRoutes ~ auctionRoutes ~ staticContentRoutes
-  val serverBinding: Future[Http.ServerBinding] = Http().bindAndHandle(routes, "localhost", 8080)
+  val serverBinding: Future[Http.ServerBinding] = Http().bindAndHandle(routes, hostname, port)
 
   serverBinding.onComplete {
     case Success(bound) =>

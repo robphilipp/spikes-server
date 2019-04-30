@@ -1,15 +1,12 @@
 package com.example
 
-import akka.NotUsed
-import akka.actor.{ActorRef, ActorSystem}
+import akka.actor.ActorSystem
 import akka.event.Logging
-import akka.http.scaladsl.model.ws.{BinaryMessage, Message, TextMessage, UpgradeToWebSocket}
-import akka.http.scaladsl.model.{ContentTypes, HttpEntity, HttpRequest, HttpResponse, Uri}
+import akka.http.scaladsl.model.ws.{Message, TextMessage}
 import akka.http.scaladsl.server.Directives._
 import akka.http.scaladsl.server.Route
-import akka.stream.ActorMaterializer
 import akka.stream.scaladsl._
-import akka.util.{ByteString, Timeout}
+import akka.util.Timeout
 
 import scala.concurrent.duration._
 import scala.util.Random
@@ -28,15 +25,14 @@ trait WebSocketRoutes extends JsonSupport {
 
   // streams are re-usable so we can define it here
   // and use it for every request
-//  private val numbers = Source.fromIterator(() => Iterator.continually(Random.nextInt()))
   import scala.concurrent.duration._
   private val numbers = Source.tick(0 millis, 10 millis, 1)
-//  fromIterator(() => {
-//    Thread.sleep(10)
-//    Iterator.fill(100000)(Random.nextDouble() * 1000)
-//  })
 
-  def greeter: Flow[Message, Message, Any] = Flow.fromSinkAndSource(Sink.ignore, numbers.map(_ => TextMessage(s"${Random.nextDouble() * 1000}")))
+//  private val startTime = System.currentTimeMillis()
+  def greeter: Flow[Message, Message, Any] = Flow.fromSinkAndSource(
+    Sink.ignore,
+    numbers.map(_ => TextMessage(s"${System.currentTimeMillis()},${Random.nextDouble() * 1000}"))
+  )
 
   lazy val webSocketRoutes: Route =
     path("web-socket") {

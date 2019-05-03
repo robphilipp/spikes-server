@@ -28,15 +28,17 @@ trait WebSocketRoutes extends JsonSupport {
   import scala.concurrent.duration._
   private val numbers = Source.tick(0 millis, 10 millis, 1)
 
-//  private val startTime = System.currentTimeMillis()
+  private var startTime = System.currentTimeMillis()
+//  private val startTime = 0
   def greeter: Flow[Message, Message, Any] = Flow.fromSinkAndSource(
     Sink.ignore,
-    numbers.map(_ => TextMessage(s"${System.currentTimeMillis()},${Random.nextDouble() * 1000}"))
+    numbers.map(_ => TextMessage(s"${System.currentTimeMillis() - startTime},${Random.nextDouble() * 1000}"))
   )
 
   lazy val webSocketRoutes: Route =
     path("web-socket") {
       get {
+        startTime = System.currentTimeMillis()
         handleWebSocketMessages(greeter)
       }
     }

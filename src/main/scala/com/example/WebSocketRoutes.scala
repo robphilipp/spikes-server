@@ -27,12 +27,16 @@ trait WebSocketRoutes extends JsonSupport {
   // and use it for every request
   import scala.concurrent.duration._
   private val numbers = Source.tick(0 millis, 10 millis, 1)
+//  private val incoming = Sink.(message => println(message))
 
   private var startTime = System.currentTimeMillis()
-//  private val startTime = 0
+  // todo add initialization messages that give the number of neurons; or should there be a REST call
+  //    to get the neural network information to allow the user to set up before starting
   def greeter: Flow[Message, Message, Any] = Flow.fromSinkAndSource(
     Sink.ignore,
-    numbers.map(_ => TextMessage(s"${System.currentTimeMillis() - startTime},${Random.nextDouble() * 1000}"))
+//    incoming,
+//    numbers.map(_ => TextMessage(s"${System.currentTimeMillis() - startTime},${Random.nextDouble() * 1000}"))
+    numbers.map(_ => TextMessage(s"out-${Random.nextInt(10)},${System.currentTimeMillis() - startTime},1"))
   )
 
   lazy val webSocketRoutes: Route =

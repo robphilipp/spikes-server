@@ -6,6 +6,7 @@ import akka.event.Logging
 import akka.http.scaladsl.model.ws.{Message, TextMessage}
 import akka.http.scaladsl.server.Directives._
 import akka.http.scaladsl.server.Route
+import akka.stream.{KillSwitches, ThrottleMode}
 import akka.stream.scaladsl._
 import akka.util.Timeout
 
@@ -30,14 +31,18 @@ trait WebSocketRoutes extends JsonSupport {
    | streams are re-usable so we can define it here and use it for every request
    */
   // (2)
-  //  private val numbers = Source.tick(0 millis, 10 millis, 1)
+//    private val numbers = Source.tick(0 millis, 10 millis, 1)
   // (3)
   // get the list of messages for each time and flat-map them into individual messages
   private val numNeurons = 10
+  private val sharedKillSwitch = KillSwitches.shared("my-kill-switch")
   private val throttled = Source(1 to 1000)
-    .throttle(1, 20 millis)
+    .throttle(4, 20.millis, 0, ThrottleMode.Shaping)
     .map(_ => messages(numNeurons))
     .mapConcat(identity)
+    .via(sharedKillSwitch.flow)
+
+  //    .via(KillSwitches.single)(Keep.both)
   // (1)
   //  private val throttled = Source.repeat(NotUsed).map(_ => 1).throttle(1, 5 millis)
 
@@ -53,8 +58,12 @@ trait WebSocketRoutes extends JsonSupport {
     */
   private def messages(numNeurons: Int): List[TextMessage] = {
     val fireTime = System.currentTimeMillis() - startTime
+    println(fireTime)
     val neuronsFiring = Random.nextInt(numNeurons)
-    Range(0, neuronsFiring).map(_ => TextMessage(s"out-${Random.nextInt(numNeurons)},$fireTime,1")).toList
+    Random
+      .shuffle(Range(0, numNeurons).toList)
+      .take(neuronsFiring)
+      .map(index => TextMessage(s"out-$index,$fireTime,1"))
   }
 
   // todo need to use a graph to split the messages based on what time of neuron event occurred.
@@ -66,19 +75,25 @@ trait WebSocketRoutes extends JsonSupport {
   /**
     * @return The greeter that sends messages (neuron firing messages) down the websocket
     */
-  def greeter: Flow[Message, Message, Any] = Flow.fromSinkAndSource(
-    Sink.ignore,
-    // use below with (2)
-    //    numbers.map(_ => TextMessage(s"out-${Random.nextInt(10)},${System.currentTimeMillis() - startTime},1"))
-    // use below with (1)
-    //    throttled.map(_ => TextMessage(s"out-${Random.nextInt(10)},${System.currentTimeMillis() - startTime},1"))
-    // use below with (3)
-//    throttled
-    Source.combine(
-      Source.single(TextMessage(s"desc: neurons=$numNeurons")),   // initial network description
-      throttled   // all the messages that are begin received
-    )(Concat(_))
-  )
+  def greeter: Flow[Message, Message, Any] = {
+    println("starting web socket")
+    Flow.fromSinkAndSourceCoupled(
+      // incoming messages from the websocket
+      Sink.foreach(message => message.asTextMessage.getStrictText match {
+        case "stop" =>
+          println(s"client requested stop")
+//          sharedKillSwitch.shutdown()
+
+        case other => println(s"from client: $other")
+      }),
+
+      // outgoing messages from the websocket
+      Source.combine(
+        Source.single(TextMessage(s"desc: neurons=$numNeurons")),   // initial network description
+        throttled   // all the messages that are being received
+      )(Concat(_))
+    )
+  }
 
   // the route
   lazy val webSocketRoutes: Route =

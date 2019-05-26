@@ -30,24 +30,12 @@ trait WebSocketRoutes extends JsonSupport {
   /*
    | streams are re-usable so we can define it here and use it for every request
    */
-  // (2)
-//    private val numbers = Source.tick(0 millis, 10 millis, 1)
-  // (3)
   // get the list of messages for each time and flat-map them into individual messages
   private val numNeurons = 10
-  private val sharedKillSwitch = KillSwitches.shared("my-kill-switch")
   private val throttled = Source(1 to 1000)
     .throttle(4, 20.millis, 0, ThrottleMode.Shaping)
     .map(_ => messages(numNeurons))
     .mapConcat(identity)
-    .via(sharedKillSwitch.flow)
-
-  //    .via(KillSwitches.single)(Keep.both)
-  // (1)
-  //  private val throttled = Source.repeat(NotUsed).map(_ => 1).throttle(1, 5 millis)
-
-  // unused
-  //  private val incoming = Sink.(message => println(message))
 
   private var startTime = System.currentTimeMillis()
 
@@ -82,19 +70,26 @@ trait WebSocketRoutes extends JsonSupport {
       Sink.foreach(message => message.asTextMessage.getStrictText match {
         case "stop" =>
           println(s"client requested stop")
-//          sharedKillSwitch.shutdown()
 
         case other => println(s"from client: $other")
       }),
 
       // outgoing messages from the websocket
       Source.combine(
-        Source.single(TextMessage(s"desc: neurons=$numNeurons")),   // initial network description
-        throttled   // all the messages that are being received
+        // todo send the actual network description
+        // initial network description
+        Source.single(TextMessage(s"desc: neurons=$numNeurons")),
+        // all the messages that are being received
+        throttled
       )(Concat(_))
     )
   }
 
+  // todo 1. add regular REST route to build the network based on the description and return the
+  //        actor ref to the network (and possibly the environment?)
+  //      2. using the actor ref from the constructed network, we socket call to start the network
+  //        and stream back the results.
+  //      3. closing the websocket needs to stop the network
   // the route
   lazy val webSocketRoutes: Route =
     path("web-socket") {

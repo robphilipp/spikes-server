@@ -1,6 +1,6 @@
 package com.example
 
-import akka.NotUsed
+import akka.{Done, NotUsed}
 import akka.actor.ActorSystem
 import akka.event.Logging
 import akka.http.scaladsl.model.ws.{Message, TextMessage}
@@ -10,6 +10,7 @@ import akka.stream.{KillSwitches, ThrottleMode}
 import akka.stream.scaladsl._
 import akka.util.Timeout
 
+import scala.concurrent.Future
 import scala.concurrent.duration._
 import scala.util.Random
 
@@ -32,15 +33,22 @@ trait WebSocketRoutes extends JsonSupport {
    */
   // get the list of messages for each time and flat-map them into individual messages
   private val numNeurons = 10
-  private val throttled = Source(1 to 1000)
-    .throttle(4, 20.millis, 0, ThrottleMode.Shaping)
-    .map(_ => messages(numNeurons))
-    .mapConcat(identity)
 
-  private var startTime = System.currentTimeMillis()
+  // text message holding the network description
+  private val networkDescription: Source[TextMessage, NotUsed] = Source
+    .single(TextMessage(s"desc: neurons=$numNeurons"))
+
+  // source for throttled random messages
+  private val throttled: Source[TextMessage, NotUsed] = Source(1 to 1000)
+    .throttle(4, 20.millis, 0, ThrottleMode.Shaping)
+    .mapConcat(_ => messages(numNeurons))
+
+  // combined source that sends the network description first, and then sends the random messages
+  private val messageSource: Source[TextMessage, NotUsed] = networkDescription.concat(throttled)
 
   /**
     * get a random number of messages (i.e. some random set of neurons spike)
+    *
     * @param numNeurons The number of neurons for which signals are sent
     * @return
     */
@@ -54,6 +62,17 @@ trait WebSocketRoutes extends JsonSupport {
       .map(index => TextMessage(s"out-$index,$fireTime,1"))
   }
 
+  private def clientRequests: Sink[Message, NotUsed] =
+    Flow[Message]
+      .to(Sink.foreach(message => message.asTextMessage.getStrictText match {
+        case "stop" =>
+          println(s"client requested stop")
+
+        case other => println(s"from client: $other")
+      }))
+
+  private var startTime = System.currentTimeMillis()
+
   // todo need to use a graph to split the messages based on what time of neuron event occurred.
   //    1. there is mention of lazily create sources and turning them on when required. So for example,
   //       if UI client wants spikes, then send those, if the UI client wants weights, then send those.
@@ -65,24 +84,7 @@ trait WebSocketRoutes extends JsonSupport {
     */
   def greeter: Flow[Message, Message, Any] = {
     println("starting web socket")
-    Flow.fromSinkAndSourceCoupled(
-      // incoming messages from the websocket
-      Sink.foreach(message => message.asTextMessage.getStrictText match {
-        case "stop" =>
-          println(s"client requested stop")
-
-        case other => println(s"from client: $other")
-      }),
-
-      // outgoing messages from the websocket
-      Source.combine(
-        // todo send the actual network description
-        // initial network description
-        Source.single(TextMessage(s"desc: neurons=$numNeurons")),
-        // all the messages that are being received
-        throttled
-      )(Concat(_))
-    )
+    Flow.fromSinkAndSourceCoupled(clientRequests, messageSource)
   }
 
   // todo 1. add regular REST route to build the network based on the description and return the
@@ -92,10 +94,10 @@ trait WebSocketRoutes extends JsonSupport {
   //      3. closing the websocket needs to stop the network
   // the route
   lazy val webSocketRoutes: Route =
-    path("web-socket") {
-      get {
-        startTime = System.currentTimeMillis()
-        handleWebSocketMessages(greeter)
-      }
+  path("web-socket") {
+    get {
+      startTime = System.currentTimeMillis()
+      handleWebSocketMessages(greeter)
     }
+  }
 }

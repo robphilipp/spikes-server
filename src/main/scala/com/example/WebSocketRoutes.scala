@@ -6,7 +6,7 @@ import akka.event.Logging
 import akka.http.scaladsl.model.ws.{Message, TextMessage}
 import akka.http.scaladsl.server.Directives._
 import akka.http.scaladsl.server.Route
-import akka.stream.{KillSwitches, ThrottleMode}
+import akka.stream.{KillSwitches, SharedKillSwitch, ThrottleMode}
 import akka.stream.scaladsl._
 import akka.util.Timeout
 
@@ -50,7 +50,7 @@ trait WebSocketRoutes extends JsonSupport {
     * get a random number of messages (i.e. some random set of neurons spike)
     *
     * @param numNeurons The number of neurons for which signals are sent
-    * @return
+    * @return a list of text-messages
     */
   private def messages(numNeurons: Int): List[TextMessage] = {
     val fireTime = System.currentTimeMillis() - startTime
@@ -62,6 +62,10 @@ trait WebSocketRoutes extends JsonSupport {
       .map(index => TextMessage(s"out-$index,$fireTime,1"))
   }
 
+  /**
+    * flow that handles requests from the websocket client.
+    * @return
+    */
   private def clientRequests: Sink[Message, NotUsed] =
     Flow[Message]
       .to(Sink.foreach(message => message.asTextMessage.getStrictText match {
@@ -72,6 +76,92 @@ trait WebSocketRoutes extends JsonSupport {
       }))
 
   private var startTime = System.currentTimeMillis()
+
+//  // source for throttled random messages
+//  private val stopSending = KillSwitches.shared("stop-sending")
+//  private val throttledStrings: Source[String, NotUsed] = Source(1 to 100)
+//    .throttle(4, 20.millis, 0, ThrottleMode.Shaping)
+//    .mapConcat(_ => stringMessages(numNeurons))
+//    .via(stopSending.flow)
+//
+//  private def stringMessages(numNeurons: Int): List[String] = {
+//    val fireTime = System.currentTimeMillis() - startTime
+//    println(fireTime)
+//    val neuronsFiring = Random.nextInt(numNeurons)
+//    Random
+//      .shuffle(Range(0, numNeurons).toList)
+//      .take(neuronsFiring)
+//      .map(index => s"out-$index,$fireTime,1")
+//  }
+//
+//  private val interactiveFlow: Flow[Message, Message, NotUsed] = Flow[Message]
+//    .map {
+//      case TextMessage.Strict(msg) => msg match {
+//        case "build" =>
+//          println("build network request")
+//          TextMessage(Source.single(s"desc: neurons=$numNeurons"))
+//
+//        case "stop" =>
+//          println("client stop request")
+//          stopSending.shutdown()
+//          TextMessage(Source.single("stopped"))
+//
+//        case other => TextMessage(Source.single(s"Invalid request: $other"))
+//      }
+//
+//      case msg =>
+//        println("stream")
+//        msg
+//    }
+//    .map {
+//      case msg: TextMessage => msg.asTextMessage.getStrictText match {
+//        case "build" =>
+//          println("build network request")
+//          TextMessage(Source.single(s"desc: neurons=$numNeurons"))
+//
+//        case "stop" =>
+//          println("client stop request")
+//          stopSending.shutdown()
+//          TextMessage(Source.single("stopped"))
+//
+//        case other => TextMessage(Source.single(s"Invalid request: $other"))
+//      }
+//    }
+
+//  private val throttledFlow: Flow[Message, Message, NotUsed] = Flow[Message]
+//    .map {
+//      case TextMessage.Strict(msg) => msg match {
+//        case "start" =>
+//          println("start")
+//          TextMessage(throttledStrings)
+//
+//        case other => TextMessage(Source.single(s"Invalid request: $other"))
+//      }
+//
+//      case msg =>
+//        println("stream")
+//        msg
+//    }
+
+//  private val messageFlow = Flow[Message].via(interactiveFlow.async).via(throttledFlow.async)
+
+//  private val myFlow: Flow[Message, Message, NotUsed] = Flow[Message]
+//    .map(message => message.asTextMessage.getStrictText match {
+//      case "build" =>
+//        println("build network request")
+//        TextMessage(Source.single(s"desc: neurons=$numNeurons"))
+//
+//      case "start" =>
+//        println("start")
+//        TextMessage(throttledStrings)
+//
+//      case "stop" =>
+//        println("client stop request")
+//        stopSending.shutdown()
+//        TextMessage(Source.single("stopped"))
+//
+//      case other => TextMessage(Source.single(s"Invalid request: $other"))
+//    }).async
 
   // todo need to use a graph to split the messages based on what time of neuron event occurred.
   //    1. there is mention of lazily create sources and turning them on when required. So for example,
@@ -85,6 +175,7 @@ trait WebSocketRoutes extends JsonSupport {
   def greeter: Flow[Message, Message, Any] = {
     println("starting web socket")
     Flow.fromSinkAndSourceCoupled(clientRequests, messageSource)
+//    messageFlow
   }
 
   // todo 1. add regular REST route to build the network based on the description and return the

@@ -3,11 +3,13 @@ package com.digitalcipher.spiked
 import akka.actor.{Actor, ActorLogging, ActorRef, Cancellable, PoisonPill, Props}
 import com.digitalcipher.spiked.NetworkManager.AddNetwork
 import com.digitalcipher.spiked.SpikedNetwork.{Build, IncomingMessage, OutgoingMessage, SendMessage}
+import com.digitalcipher.spiked.json.JsonSupport
+import spray.json.{DefaultJsonProtocol, JsonParser}
 
 import scala.concurrent.ExecutionContextExecutor
 import scala.util.Random
 
-class SpikedNetwork(name: String, manager: ActorRef) extends Actor with ActorLogging {
+class SpikedNetwork(name: String, manager: ActorRef) extends Actor with ActorLogging with JsonSupport {
 
   implicit val executionContext: ExecutionContextExecutor = context.dispatcher
   import scala.concurrent.duration._
@@ -34,6 +36,7 @@ class SpikedNetwork(name: String, manager: ActorRef) extends Actor with ActorLog
       manager ! AddNetwork(name)
   }
 
+  import DefaultJsonProtocol._
   /**
     * State where the network is waiting to be started. At this point the network is already
     * built.
@@ -46,6 +49,7 @@ class SpikedNetwork(name: String, manager: ActorRef) extends Actor with ActorLog
         log.info(s"starting network; name: $name")
 
         // todo ultimately, this will be replaced by a source from the kafka
+        // start the time and send messages every interval
         val cancellable = context.system.scheduler.schedule(
           initialDelay = 0 seconds,
           interval = 20 milliseconds,
@@ -89,7 +93,6 @@ class SpikedNetwork(name: String, manager: ActorRef) extends Actor with ActorLog
     */
   private def messages(numNeurons: Int, startTime: Long): List[OutgoingMessage] = {
     val fireTime = System.currentTimeMillis() - startTime
-//    println(fireTime)
     val neuronsFiring = Random.nextInt(numNeurons)
     Random
       .shuffle(Range(0, numNeurons).toList)

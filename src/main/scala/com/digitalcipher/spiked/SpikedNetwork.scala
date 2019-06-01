@@ -2,14 +2,15 @@ package com.digitalcipher.spiked
 
 import akka.actor.{Actor, ActorLogging, ActorRef, Cancellable, PoisonPill, Props}
 import com.digitalcipher.spiked.NetworkManager.AddNetwork
-import com.digitalcipher.spiked.SpikedNetwork.{Build, IncomingMessage, OutgoingMessage, SendMessage}
+import com.digitalcipher.spiked.SpikedNetwork.{Build, IncomingMessage, NetworkCommand, OutgoingMessage, SendMessage}
 import com.digitalcipher.spiked.json.JsonSupport
-import spray.json.{DefaultJsonProtocol, JsonParser}
+import com.digitalcipher.spiked.json.JsonSupport._
+import spray.json._
 
 import scala.concurrent.ExecutionContextExecutor
 import scala.util.Random
 
-class SpikedNetwork(name: String, manager: ActorRef) extends Actor with ActorLogging with JsonSupport {
+class SpikedNetwork(name: String, manager: ActorRef) extends Actor with ActorLogging {
 
   implicit val executionContext: ExecutionContextExecutor = context.dispatcher
   import scala.concurrent.duration._
@@ -36,7 +37,7 @@ class SpikedNetwork(name: String, manager: ActorRef) extends Actor with ActorLog
       manager ! AddNetwork(name)
   }
 
-  import DefaultJsonProtocol._
+//  import com.digitalcipher.spiked.json.JsonSupport.NetworkCommandFormat
   /**
     * State where the network is waiting to be started. At this point the network is already
     * built.
@@ -44,25 +45,30 @@ class SpikedNetwork(name: String, manager: ActorRef) extends Actor with ActorLog
     * @return a receive instance
     */
   def waiting(wsActor: ActorRef): Receive = {
-    case IncomingMessage(text) => text match {
-      case "start" =>
+    case IncomingMessage(text) => text.parseJson.convertTo match {
+      case NetworkCommand("start") =>
+//      case "start" =>
         log.info(s"starting network; name: $name")
 
         // todo ultimately, this will be replaced by a source from the kafka
         // start the time and send messages every interval
         val cancellable = context.system.scheduler.schedule(
-          initialDelay = 0 seconds,
-          interval = 20 milliseconds,
+          initialDelay = 0.seconds,
+          interval = 20.milliseconds,
           receiver = self,
           SendMessage()
         )
 
         context become running(wsActor, System.currentTimeMillis(), cancellable)
 
-      case "destroy" =>
+      case NetworkCommand("destroy") =>
+//      case "destroy" =>
         log.info(s"destroying network; name: $name")
         wsActor ! PoisonPill
+
+      case _ => log.error(s"Invalid command; $text")
     }
+    case _ => log.error(s"Invalid incoming message type")
   }
 
   /**
@@ -76,8 +82,8 @@ class SpikedNetwork(name: String, manager: ActorRef) extends Actor with ActorLog
     case SendMessage() =>
       messages(10, startTime).foreach(message => actor ! message)
 
-    case IncomingMessage(text) => text match {
-      case "stop" =>
+    case IncomingMessage(text) => text.parseJson.convertTo match {
+      case NetworkCommand("stop") =>
         log.info(s"stopping network; name: $name")
         cancellable.cancel()
 
@@ -108,6 +114,7 @@ object SpikedNetwork {
   case class IncomingMessage(text: String) extends NetworkMessage
   case class OutgoingMessage(text: String) extends NetworkMessage
   case class SendMessage() extends NetworkMessage
+  case class NetworkCommand(command: String) extends NetworkMessage
 
   def props(name: String, manager: ActorRef) = Props(new SpikedNetwork(name, manager))
 }

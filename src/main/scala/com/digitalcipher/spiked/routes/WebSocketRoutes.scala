@@ -15,7 +15,7 @@ import com.typesafe.config.ConfigFactory
 /**
   * Web socket route for streaming data to the spikes UI
   */
-trait WebSocketRoutes extends JsonSupport {
+trait WebSocketRoutes {
   // read the configuration
   private val config = ConfigFactory.parseResources("application.conf")
   val webSocketPath: String = Option(config.getString("http.webSocketPath")).getOrElse("")

@@ -19,7 +19,7 @@ import scala.concurrent.duration._
 /**
   * Routes for retrieving the static content for the spikes-ui application
   */
-trait StaticContentRoutes extends JsonSupport {
+trait StaticContentRoutes {
   // read the configuration
   private val config = ConfigFactory.parseResources("application.conf")
   val baseUrl: String = Option(config.getString("http.baseUrl")).getOrElse("")

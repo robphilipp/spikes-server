@@ -1,6 +1,7 @@
 package com.digitalcipher.spiked.routes
 
-import java.nio.file.{Files, Paths}
+import java.nio.file.{Files, Path, Paths}
+import java.util.concurrent.TimeUnit
 
 import akka.actor.ActorSystem
 import akka.event.Logging
@@ -10,39 +11,45 @@ import akka.http.scaladsl.server.Directives._
 import akka.http.scaladsl.server.Route
 import akka.util.Timeout
 import com.digitalcipher.spiked.json.JsonSupport
+import com.typesafe.config.ConfigFactory
 
+import scala.collection.JavaConverters._
 import scala.concurrent.duration._
 
+/**
+  * Routes for retrieving the static content for the spikes-ui application
+  */
 trait StaticContentRoutes extends JsonSupport {
+  // read the configuration
+  private val config = ConfigFactory.parseResources("application.conf")
+  val baseUrl: String = Option(config.getString("http.baseUrl")).getOrElse("")
+  val defaultPage: Path = Option(config.getStringList("http.defaultPages"))
+    .map(pages => pages.asScala.map(page => Paths.get(baseUrl, page))
+      .find(page => Files.exists(page))
+      .getOrElse(Paths.get(""))
+    )
+    .getOrElse(Paths.get(""))
+  implicit lazy val timeout: Timeout = Option(config.getInt("http.timeoutSeconds"))
+    .map(seconds => Timeout(seconds, TimeUnit.SECONDS))
+    .getOrElse(Timeout(5.seconds))
 
   // we leave these abstract, since they will be provided by the App
   implicit def actorSystem: ActorSystem
 
-  private lazy val log = Logging(actorSystem, getClass)
-
-//  // other dependencies that UserRoutes use
-//  def userRegistryActor: ActorRef
-
-  // Required by the `ask` (?) method below
-  private implicit lazy val timeout: Timeout = Timeout(5.seconds) // usually we'd obtain the timeout from the system's configuration
-
-  val workingDirectory: String = System.getProperty("user.dir")
-
-  private def getExtensions(fileName: String): String = {
+  /**
+    * Extracts the extension of the filename. If the filename is only an extension, or
+    * the filename has no extension, then returns an empty string
+    * @param fileName The file name
+    * @return The extension or an empty string
+    */
+  private def fileExtension(fileName: String): String = {
     val index = fileName.lastIndexOf('.')
     if (index != 0) {
       fileName.drop(index + 1)
-    } else
+    }
+    else {
       ""
-  }
-
-  private def getDefaultPage = {
-    val fullPath = List(Paths.get("static/index.html"), Paths.get("static/index.htm"))
-    val res = fullPath.filter(x => Files.exists(x))
-    if (res.nonEmpty)
-      res.head
-    else
-      Paths.get("")
+    }
   }
 
   lazy val staticContentRoutes: Route =
@@ -51,19 +58,23 @@ trait StaticContentRoutes extends JsonSupport {
         entity(as[HttpRequest]) { requestData =>
           complete {
 
-            val fullPath = requestData.uri.path.toString match {
-              case "/" => getDefaultPage
-              case "" => getDefaultPage
-              case _ => Paths.get("static/" + requestData.uri.path.toString)
+            val staticContent = requestData.uri.path.toString match {
+              // grab the default page
+              case "/" | "" =>  defaultPage
+
+              case _ => Paths.get(baseUrl, requestData.uri.path.toString)
             }
 
-            val ext = getExtensions(fullPath.getFileName.toString)
-            val c: ContentType = ContentType(
-              MediaTypes.forExtensionOption(ext).getOrElse(MediaTypes.`text/plain`),
+            // calculate the content type based on the file extension
+            val contentType: ContentType = ContentType(
+              MediaTypes
+                .forExtensionOption(fileExtension(staticContent.getFileName.toString))
+                .getOrElse(MediaTypes.`text/plain`),
               () => HttpCharsets.`UTF-8`
             )
-            val byteArray = Files.readAllBytes(fullPath)
-            HttpResponse(OK, entity = HttpEntity(c, byteArray))
+
+            // return the response
+            HttpResponse(OK, entity = HttpEntity(contentType, Files.readAllBytes(staticContent)))
           }
         }
       }

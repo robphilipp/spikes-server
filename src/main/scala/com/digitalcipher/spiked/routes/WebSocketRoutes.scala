@@ -2,21 +2,25 @@ package com.digitalcipher.spiked.routes
 
 import akka.NotUsed
 import akka.actor.{ActorRef, ActorSystem, PoisonPill, Props}
-import akka.event.Logging
-
 import akka.http.scaladsl.model.ws.{Message, TextMessage}
 import akka.http.scaladsl.server.Directives.{handleWebSocketMessages, path}
 import akka.http.scaladsl.server.Route
 import akka.stream.OverflowStrategy
 import akka.stream.scaladsl.{Flow, Sink, Source}
 import com.digitalcipher.spiked
-import com.digitalcipher.spiked.{NetworkManager, SpikedNetwork}
 import com.digitalcipher.spiked.json.JsonSupport
+import com.digitalcipher.spiked.{NetworkManager, SpikedNetwork}
+import com.typesafe.config.ConfigFactory
 
+/**
+  * Web socket route for streaming data to the spikes UI
+  */
 trait WebSocketRoutes extends JsonSupport {
-  implicit def actorSystem: ActorSystem
+  // read the configuration
+  private val config = ConfigFactory.parseResources("application.conf")
+  val webSocketPath: String = Option(config.getString("http.webSocketPath")).getOrElse("")
 
-  private lazy val log = Logging(actorSystem, classOf[WebSocketRoutes])
+  implicit def actorSystem: ActorSystem
 
   lazy val networkManager: ActorRef = actorSystem.actorOf(Props[NetworkManager], "spikes-network-manager")
   lazy val webSocketRoutes: Route = newNetworkRoute
@@ -27,9 +31,12 @@ trait WebSocketRoutes extends JsonSupport {
 
     // messages coming from the web-socket client
     val incomingMessages: Sink[Message, NotUsed] =
-      Flow[Message].map {
-        case TextMessage.Strict(text) => SpikedNetwork.IncomingMessage(text)
-      }.to(Sink.actorRef(networkActor, PoisonPill))
+      Flow[Message]
+        .map {
+          case TextMessage.Strict(text) => SpikedNetwork.IncomingMessage(text)
+          case _ => // do nothing
+        }
+        .to(Sink.actorRef(networkActor, PoisonPill))
 
     val outgoingMessages: Source[Message, NotUsed] =
       Source
@@ -50,8 +57,7 @@ trait WebSocketRoutes extends JsonSupport {
   }
 
   def newNetworkRoute: Route =
-//    path("spikes-network") {
-    path("web-socket") {
+    path(webSocketPath) {
       handleWebSocketMessages(newNetwork())
     }
 }

@@ -37,7 +37,6 @@ class SpikedNetwork(name: String, manager: ActorRef) extends Actor with ActorLog
       manager ! AddNetwork(name)
   }
 
-//  import com.digitalcipher.spiked.json.JsonSupport.NetworkCommandFormat
   /**
     * State where the network is waiting to be started. At this point the network is already
     * built.
@@ -47,7 +46,6 @@ class SpikedNetwork(name: String, manager: ActorRef) extends Actor with ActorLog
   def waiting(wsActor: ActorRef): Receive = {
     case IncomingMessage(text) => text.parseJson.convertTo match {
       case NetworkCommand("start") =>
-//      case "start" =>
         log.info(s"starting network; name: $name")
 
         // todo ultimately, this will be replaced by a source from the kafka
@@ -62,11 +60,10 @@ class SpikedNetwork(name: String, manager: ActorRef) extends Actor with ActorLog
         context become running(wsActor, System.currentTimeMillis(), cancellable)
 
       case NetworkCommand("destroy") =>
-//      case "destroy" =>
         log.info(s"destroying network; name: $name")
         wsActor ! PoisonPill
 
-      case _ => log.error(s"Invalid command; $text")
+      case command: NetworkCommand => log.error(s"Invalid command; ${command.command}")
     }
     case _ => log.error(s"Invalid incoming message type")
   }
@@ -88,7 +85,11 @@ class SpikedNetwork(name: String, manager: ActorRef) extends Actor with ActorLog
         cancellable.cancel()
 
         context become waiting(actor)
+
+      case command: NetworkCommand => log.error(s"Invalid network command; command: ${command.command}")
     }
+
+    case message => log.error(s"Invalid message type; message type: ${message.getClass.getName}")
   }
 
   /**

@@ -18,6 +18,4 @@ object JsonSupport extends DefaultJsonProtocol {
       }
     }
   }
-
-  //  implicit val networkCommandJsonFormat: RootJsonFormat[NetworkCommand] = jsonFormat1(NetworkCommand)
 }

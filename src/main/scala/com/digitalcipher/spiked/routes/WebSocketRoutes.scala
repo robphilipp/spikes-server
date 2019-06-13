@@ -8,7 +8,6 @@ import akka.http.scaladsl.server.Route
 import akka.stream.OverflowStrategy
 import akka.stream.scaladsl.{Flow, Sink, Source}
 import com.digitalcipher.spiked
-import com.digitalcipher.spiked.json.JsonSupport
 import com.digitalcipher.spiked.{NetworkManager, SpikedNetwork}
 import com.typesafe.config.ConfigFactory
 
@@ -23,9 +22,20 @@ trait WebSocketRoutes {
   implicit def actorSystem: ActorSystem
 
   lazy val networkManager: ActorRef = actorSystem.actorOf(Props[NetworkManager], "spikes-network-manager")
-  lazy val webSocketRoutes: Route = newNetworkRoute
+  lazy val webSocketRoutes: Route = networkRoute
 
-  def newNetwork(): Flow[Message, Message, NotUsed] = {
+  /**
+    * @return The network route
+    */
+  def networkRoute: Route = path(webSocketPath) {
+    handleWebSocketMessages(network())
+  }
+
+  /**
+    * @return creates a new network route as a flow that sends incoming messages to the spiked-network
+    *         and
+    */
+  def network(): Flow[Message, Message, NotUsed] = {
     // create a network actor for the webSocket connection that knows about its network manager
     val networkActor = actorSystem.actorOf(SpikedNetwork.props("first", networkManager))
 
@@ -38,14 +48,15 @@ trait WebSocketRoutes {
         }
         .to(Sink.actorRef(networkActor, PoisonPill))
 
+    // messages that go out to the web-socket client
     val outgoingMessages: Source[Message, NotUsed] =
       Source
         .actorRef[spiked.SpikedNetwork.OutgoingMessage](10, OverflowStrategy.fail)
-        .mapMaterializedValue { outgoingActor =>
+        .mapMaterializedValue { outgoingMessageActor =>
           // you need to send a Build message to get the actor in a state
           // where it's ready to receive and send messages, we used the mapMaterialized value
           // so we can get access to it as soon as this is materialized
-          networkActor ! SpikedNetwork.Build(outgoingActor)
+          networkActor ! SpikedNetwork.Build(outgoingMessageActor)
           NotUsed
         }
         .map {
@@ -55,9 +66,4 @@ trait WebSocketRoutes {
 
     Flow.fromSinkAndSource(incomingMessages, outgoingMessages)
   }
-
-  def newNetworkRoute: Route =
-    path(webSocketPath) {
-      handleWebSocketMessages(newNetwork())
-    }
 }

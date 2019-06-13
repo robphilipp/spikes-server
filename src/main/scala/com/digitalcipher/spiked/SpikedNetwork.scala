@@ -2,8 +2,7 @@ package com.digitalcipher.spiked
 
 import akka.actor.{Actor, ActorLogging, ActorRef, Cancellable, PoisonPill, Props}
 import com.digitalcipher.spiked.NetworkManager.AddNetwork
-import com.digitalcipher.spiked.SpikedNetwork.{Build, IncomingMessage, NetworkCommand, OutgoingMessage, SendMessage}
-import com.digitalcipher.spiked.json.JsonSupport
+import com.digitalcipher.spiked.SpikedNetwork._
 import com.digitalcipher.spiked.json.JsonSupport._
 import spray.json._
 
@@ -29,21 +28,20 @@ class SpikedNetwork(name: String, manager: ActorRef) extends Actor with ActorLog
     // the handler returns a flow. The flow is a sink-to-source flow where the sink and source
     // are decoupled, except through this actor. This source sends messages to the web-socket
     // sink, which sends them back to the UI client.
-    case Build(wsActor) =>
+    case Build(outgoingMessageActor) =>
       log.info(s"building network; name: $name")
-      // transition to the waiting state
-      context become waiting(wsActor)
       // send the manager the name of the network
       manager ! AddNetwork(name)
+      // transition to the waiting state
+      context.become(waiting(outgoingMessageActor))
   }
 
   /**
-    * State where the network is waiting to be started. At this point the network is already
-    * built.
-    * @param wsActor The web-socket actor passed from the uninitialized state.
+    * State where the network is waiting to be started. At this point the network is already built.
+    * @param outgoingMessageActor The web-socket actor passed from the uninitialized state.
     * @return a receive instance
     */
-  def waiting(wsActor: ActorRef): Receive = {
+  def waiting(outgoingMessageActor: ActorRef): Receive = {
     case IncomingMessage(text) => text.parseJson.convertTo match {
       case NetworkCommand("start") =>
         log.info(s"starting network; name: $name")
@@ -56,37 +54,35 @@ class SpikedNetwork(name: String, manager: ActorRef) extends Actor with ActorLog
           receiver = self,
           SendMessage()
         )
-
-        context become running(wsActor, System.currentTimeMillis(), cancellable)
+        context.become(running(outgoingMessageActor, System.currentTimeMillis(), cancellable))
 
       case NetworkCommand("destroy") =>
         log.info(s"destroying network; name: $name")
-        wsActor ! PoisonPill
+        outgoingMessageActor ! PoisonPill
 
-      case command: NetworkCommand => log.error(s"Invalid command; ${command.command}")
+      case NetworkCommand(command) => log.error(s"Invalid network command (waiting); command: $command")
     }
     case _ => log.error(s"Invalid incoming message type")
   }
 
   /**
     * In this state, the network is running
-    * @param actor The web-socket actor to which to send the messages
+    * @param outgoingMessageActor The web-socket actor to which to send the messages
     * @param startTime The start time of the simulation (i.e. when the network transitioned to this state
     * @param cancellable The cancellable for the scheduled (will disappear when data is coming from kafka)
     * @return a receive instance
     */
-  def running(actor: ActorRef, startTime: Long, cancellable: Cancellable): Receive = {
+  def running(outgoingMessageActor: ActorRef, startTime: Long, cancellable: Cancellable): Receive = {
     case SendMessage() =>
-      messages(10, startTime).foreach(message => actor ! message)
+      messages(10, startTime).foreach(message => outgoingMessageActor ! message)
 
     case IncomingMessage(text) => text.parseJson.convertTo match {
       case NetworkCommand("stop") =>
         log.info(s"stopping network; name: $name")
         cancellable.cancel()
+        context.become(waiting(outgoingMessageActor))
 
-        context become waiting(actor)
-
-      case command: NetworkCommand => log.error(s"Invalid network command; command: ${command.command}")
+      case NetworkCommand(command) => log.error(s"Invalid network command (running); command: $command")
     }
 
     case message => log.error(s"Invalid message type; message type: ${message.getClass.getName}")

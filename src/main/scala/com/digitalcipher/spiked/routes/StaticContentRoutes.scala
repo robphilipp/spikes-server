@@ -4,13 +4,11 @@ import java.nio.file.{Files, Path, Paths}
 import java.util.concurrent.TimeUnit
 
 import akka.actor.ActorSystem
-import akka.event.Logging
 import akka.http.scaladsl.model.StatusCodes._
 import akka.http.scaladsl.model._
 import akka.http.scaladsl.server.Directives._
 import akka.http.scaladsl.server.Route
 import akka.util.Timeout
-import com.digitalcipher.spiked.json.JsonSupport
 import com.typesafe.config.ConfigFactory
 
 import scala.collection.JavaConverters._
@@ -57,7 +55,6 @@ trait StaticContentRoutes {
       get {
         entity(as[HttpRequest]) { requestData =>
           complete {
-
             val staticContent = requestData.uri.path.toString match {
               // grab the default page
               case "/" | "" =>  defaultPage

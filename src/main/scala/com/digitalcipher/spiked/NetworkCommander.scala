@@ -1,15 +1,15 @@
 package com.digitalcipher.spiked
 
 import akka.actor.{Actor, ActorLogging, ActorRef, Cancellable, PoisonPill, Props}
-import com.digitalcipher.spiked.NetworkManager.AddNetwork
-import com.digitalcipher.spiked.SpikedNetwork._
+import com.digitalcipher.spiked.NetworkCommanderManager.AddNetwork
+import com.digitalcipher.spiked.NetworkCommander._
 import com.digitalcipher.spiked.json.JsonSupport._
 import spray.json._
 
 import scala.concurrent.ExecutionContextExecutor
 import scala.util.Random
 
-class SpikedNetwork(name: String, manager: ActorRef) extends Actor with ActorLogging {
+class NetworkCommander(name: String, manager: ActorRef) extends Actor with ActorLogging {
 
   implicit val executionContext: ExecutionContextExecutor = context.dispatcher
   import scala.concurrent.duration._
@@ -30,10 +30,16 @@ class SpikedNetwork(name: String, manager: ActorRef) extends Actor with ActorLog
     // sink, which sends them back to the UI client.
     case Build(outgoingMessageActor) =>
       log.info(s"building network; name: $name")
-      // send the manager the name of the network
-      manager ! AddNetwork(name)
-      // transition to the waiting state
-      context.become(waiting(outgoingMessageActor))
+      // todo 1. build the actual spiked network
+      //      2. connect to kafka
+      //      3. stream topology messages to the outgoing message actor
+
+      // send the network manager the name of the network, which it will use to associate
+      // this actor (the sender) with the network name
+      manager ! AddNetwork(name, self)
+
+      // transition to the state where the network is built, but not yet running
+      context.become(built(outgoingMessageActor))
   }
 
   /**
@@ -41,12 +47,14 @@ class SpikedNetwork(name: String, manager: ActorRef) extends Actor with ActorLog
     * @param outgoingMessageActor The web-socket actor passed from the uninitialized state.
     * @return a receive instance
     */
-  def waiting(outgoingMessageActor: ActorRef): Receive = {
+  def built(outgoingMessageActor: ActorRef): Receive = {
     case IncomingMessage(text) => text.parseJson.convertTo match {
       case NetworkCommand("start") =>
         log.info(s"starting network; name: $name")
 
         // todo ultimately, this will be replaced by a source from the kafka
+        //    1. there are the network event (learning, spikes, membrane potential) messages
+
         // start the time and send messages every interval
         val cancellable = context.system.scheduler.schedule(
           initialDelay = 0.seconds,
@@ -80,7 +88,7 @@ class SpikedNetwork(name: String, manager: ActorRef) extends Actor with ActorLog
       case NetworkCommand("stop") =>
         log.info(s"stopping network; name: $name")
         cancellable.cancel()
-        context.become(waiting(outgoingMessageActor))
+        context.become(built(outgoingMessageActor))
 
       case NetworkCommand(command) => log.error(s"Invalid network command (running); command: $command")
     }
@@ -105,7 +113,7 @@ class SpikedNetwork(name: String, manager: ActorRef) extends Actor with ActorLog
 
 }
 
-object SpikedNetwork {
+object NetworkCommander {
   sealed trait NetworkMessage
   case class Build(actor: ActorRef)
   case class IncomingMessage(text: String) extends NetworkMessage
@@ -113,5 +121,5 @@ object SpikedNetwork {
   case class SendMessage() extends NetworkMessage
   case class NetworkCommand(command: String) extends NetworkMessage
 
-  def props(name: String, manager: ActorRef) = Props(new SpikedNetwork(name, manager))
+  def props(name: String, manager: ActorRef) = Props(new NetworkCommander(name, manager))
 }

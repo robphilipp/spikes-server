@@ -27,22 +27,19 @@ trait WebSocketRoutes {
   /**
     * @return The network route
     */
-  def networkRoute: Route = pathPrefix(webSocketPath / LongNumber) { id =>
+  def networkRoute: Route = pathPrefix(webSocketPath / """[a-zA-Z0-9\-_]*""".r) { id =>
     println(s"id: $id")
-    handleWebSocketMessages(network())
+    handleWebSocketMessages(networkEventHandler(id))
   }
 
-  //  def networkRoute: Route = path(webSocketPath) {
-  //    handleWebSocketMessages(network())
-  //  }
-
   /**
+    * @param networkCommanderId The ID of the network commander used to control the spikes network
     * @return creates a new network route as a flow that sends incoming messages to the spiked-network
     *         actor and routes messages form the spiked-network actor to the web-socket client.
     */
-  def network(): Flow[Message, Message, NotUsed] = {
+  def networkEventHandler(networkCommanderId: String): Flow[Message, Message, NotUsed] = {
     // create a network actor for the webSocket connection that knows about its network manager
-    val networkActor = actorSystem.actorOf(NetworkCommander.props("first", networkManager))
+    val networkActor = actorSystem.actorOf(NetworkCommander.props(networkCommanderId, networkManager))
 
     // messages coming from the web-socket client
     val incomingMessages: Sink[Message, NotUsed] =

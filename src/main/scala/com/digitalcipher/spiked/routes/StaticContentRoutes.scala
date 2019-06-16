@@ -1,42 +1,23 @@
 package com.digitalcipher.spiked.routes
 
 import java.nio.file.{Files, Path, Paths}
-import java.util.concurrent.TimeUnit
 
-import akka.actor.ActorSystem
 import akka.http.scaladsl.model.StatusCodes._
 import akka.http.scaladsl.model._
 import akka.http.scaladsl.server.Directives._
 import akka.http.scaladsl.server.Route
 import akka.util.Timeout
-import com.typesafe.config.ConfigFactory
-
-import scala.collection.JavaConverters._
-import scala.concurrent.duration._
 
 /**
   * Routes for retrieving the static content for the spikes-ui application
   */
-trait StaticContentRoutes {
-  // read the configuration
-  private val config = ConfigFactory.parseResources("application.conf")
-  val baseUrl: String = Option(config.getString("http.baseUrl")).getOrElse("")
-  val defaultPage: Path = Option(config.getStringList("http.defaultPages"))
-    .map(pages => pages.asScala.map(page => Paths.get(baseUrl, page))
-      .find(page => Files.exists(page))
-      .getOrElse(Paths.get(""))
-    )
-    .getOrElse(Paths.get(""))
-  implicit lazy val timeout: Timeout = Option(config.getInt("http.timeoutSeconds"))
-    .map(seconds => Timeout(seconds, TimeUnit.SECONDS))
-    .getOrElse(Timeout(5.seconds))
-
-  // we leave these abstract, since they will be provided by the App
-  implicit def actorSystem: ActorSystem
+class StaticContentRoutes(baseUrl: String, defaultPages: Seq[Path], timeout: Timeout) {
+  private val defaultPage: Path = defaultPages.find(page => Files.exists(page)).getOrElse(Paths.get(""))
 
   /**
     * Extracts the extension of the filename. If the filename is only an extension, or
     * the filename has no extension, then returns an empty string
+    *
     * @param fileName The file name
     * @return The extension or an empty string
     */
@@ -57,7 +38,7 @@ trait StaticContentRoutes {
           complete {
             val staticContent = requestData.uri.path.toString match {
               // grab the default page
-              case "/" | "" =>  defaultPage
+              case "/" | "" => defaultPage
 
               case _ => Paths.get(baseUrl, requestData.uri.path.toString)
             }
@@ -76,4 +57,9 @@ trait StaticContentRoutes {
         }
       }
     }
+}
+
+object StaticContentRoutes {
+  def apply(baseUrl: String, defaultPages: Seq[Path], timeout: Timeout): StaticContentRoutes =
+    new StaticContentRoutes(baseUrl, defaultPages, timeout)
 }

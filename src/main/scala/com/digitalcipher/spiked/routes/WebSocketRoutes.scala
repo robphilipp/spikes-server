@@ -1,33 +1,28 @@
 package com.digitalcipher.spiked.routes
 
 import akka.NotUsed
-import akka.actor.{ActorRef, ActorSystem, PoisonPill, Props}
+import akka.actor.{ActorRef, ActorSystem, PoisonPill}
 import akka.http.scaladsl.model.ws.{Message, TextMessage}
 import akka.http.scaladsl.server.Directives._
 import akka.http.scaladsl.server.Route
+import akka.pattern.ask
 import akka.stream.OverflowStrategy
 import akka.stream.scaladsl.{Flow, Sink, Source}
+import akka.util.Timeout
 import com.digitalcipher.spiked
-import com.digitalcipher.spiked.{NetworkCommanderManager, NetworkCommander}
-import com.typesafe.config.ConfigFactory
+import com.digitalcipher.spiked.NetworkCommander
+import com.digitalcipher.spiked.NetworkCommanderManager.RetrieveNetworkById
+
+import scala.concurrent.Await
+import scala.concurrent.duration._
 
 /**
   * Web socket route for streaming data to the spikes UI
   */
-trait WebSocketRoutes {
-  // read the configuration
-  private val config = ConfigFactory.parseResources("application.conf")
-  val webSocketPath: String = Option(config.getString("http.webSocketPath")).getOrElse("")
+class WebSocketRoutes(webSocketPath: String, networkManager: ActorRef, actorSystem: ActorSystem) {
+  private implicit val timeout: Timeout = Timeout(1 seconds)
 
-  implicit def actorSystem: ActorSystem
-
-  lazy val networkManager: ActorRef = actorSystem.actorOf(Props[NetworkCommanderManager], "spikes-network-manager")
-  lazy val webSocketRoutes: Route = networkRoute
-
-  /**
-    * @return The network route
-    */
-  def networkRoute: Route = pathPrefix(webSocketPath / """[a-zA-Z0-9\-_]*""".r) { id =>
+  lazy val webSocketRoutes: Route = pathPrefix(webSocketPath / """[a-zA-Z0-9\-_]*""".r) { id =>
     println(s"id: $id")
     handleWebSocketMessages(networkEventHandler(id))
   }
@@ -38,8 +33,13 @@ trait WebSocketRoutes {
     *         actor and routes messages form the spiked-network actor to the web-socket client.
     */
   def networkEventHandler(networkCommanderId: String): Flow[Message, Message, NotUsed] = {
-    // create a network actor for the webSocket connection that knows about its network manager
-    val networkActor = actorSystem.actorOf(NetworkCommander.props(networkCommanderId, networkManager))
+    val response = Await
+      .result(networkManager.ask(RetrieveNetworkById(networkCommanderId)), timeout.duration)
+      .asInstanceOf[Either[String, ActorRef]]
+    if(response.isLeft) {
+      throw new IllegalArgumentException(s"network commander not found; network commander ID: $networkCommanderId")
+    }
+    val networkActor = response.toOption.get
 
     // messages coming from the web-socket client
     val incomingMessages: Sink[Message, NotUsed] =
@@ -68,4 +68,9 @@ trait WebSocketRoutes {
 
     Flow.fromSinkAndSource(incomingMessages, outgoingMessages)
   }
+}
+
+object WebSocketRoutes {
+  def apply(webSocketPath: String, networkManager: ActorRef, actorSystem: ActorSystem) =
+    new WebSocketRoutes(webSocketPath, networkManager, actorSystem)
 }

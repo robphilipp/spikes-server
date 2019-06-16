@@ -1,18 +1,22 @@
 package com.digitalcipher.spiked
 
 import akka.actor.{Actor, ActorLogging, ActorRef, Cancellable, PoisonPill, Props}
+import akka.pattern.ask
+import akka.util.Timeout
 import com.digitalcipher.spiked.NetworkCommanderManager.AddNetwork
 import com.digitalcipher.spiked.NetworkCommander._
 import com.digitalcipher.spiked.json.JsonSupport._
 import spray.json._
 
-import scala.concurrent.ExecutionContextExecutor
+import scala.concurrent.{Await, ExecutionContextExecutor}
 import scala.util.Random
 
 class NetworkCommander(name: String, manager: ActorRef) extends Actor with ActorLogging {
 
   implicit val executionContext: ExecutionContextExecutor = context.dispatcher
   import scala.concurrent.duration._
+
+  implicit val timeout: Timeout = Timeout(1.seconds)
 
   override def receive: Receive = uninitialized
 
@@ -36,7 +40,9 @@ class NetworkCommander(name: String, manager: ActorRef) extends Actor with Actor
 
       // send the network manager the name of the network, which it will use to associate
       // this actor (the sender) with the network name
-      manager ! AddNetwork(name, self)
+//      manager ! AddNetwork(name, self)
+      // blocking call
+//      Await.result(manager.ask(AddNetwork(name, self)), timeout.duration)
 
       // transition to the state where the network is built, but not yet running
       context.become(built(outgoingMessageActor))

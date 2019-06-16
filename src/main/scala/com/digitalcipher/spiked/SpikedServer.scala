@@ -1,29 +1,28 @@
 package com.digitalcipher.spiked
 
-import java.nio.file.{Files, Path, Paths}
+import java.nio.file.{Path, Paths}
+import java.util.concurrent.TimeUnit
 
-import akka.actor.ActorSystem
+import akka.actor.{ActorRef, ActorSystem, Props}
 import akka.event.Logging
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.server.Directives._
 import akka.http.scaladsl.server.Route
 import akka.stream.ActorMaterializer
 import akka.util.Timeout
-import scala.concurrent.duration._
-import java.util.concurrent.TimeUnit
-import com.digitalcipher.spiked.routes.{StaticContentRoutes, WebSocketRoutes}
+import com.digitalcipher.spiked.routes.{NetworkManagementRoutes, StaticContentRoutes, WebSocketRoutes}
 import com.typesafe.config.ConfigFactory
 
-import scala.concurrent.duration.Duration
+import scala.collection.JavaConverters._
+import scala.concurrent.duration.{Duration, _}
 import scala.concurrent.{Await, ExecutionContext, Future}
 import scala.util.{Failure, Success}
-import scala.collection.JavaConverters._
 
 /**
   * Server for static content and web sockets. Serves up the web page and
   * then streams data to the real-time visualizations.
   */
-object SpikedServer extends App /*with StaticContentRoutes*/ with WebSocketRoutes {
+object SpikedServer extends App {
   // load the configuration
   private val config = ConfigFactory.parseResources("application.conf")
   private val hostname = config.getString("http.ip")
@@ -35,12 +34,12 @@ object SpikedServer extends App /*with StaticContentRoutes*/ with WebSocketRoute
   // create the streams materializer and execution context
   implicit val materializer: ActorMaterializer = ActorMaterializer()
   implicit val executionContext: ExecutionContext = actorSystem.dispatcher
+  private lazy val networkManager: ActorRef = actorSystem.actorOf(Props[NetworkCommanderManager], "spikes-network-manager")
 
   private lazy val log = Logging(actorSystem, getClass)
 
   // create the combined routes (from WebSocketRoutes and StaticContentRoutes traits)
-  lazy val routes: Route = webSocketRoutes ~ staticContentRoutes
-  log.info(s"web-socket route settings; web-socket path: $webSocketPath")
+  lazy val routes: Route = webSocketRoutes ~ staticContentRoutes ~ networkManagementRoutes
 
   // attempt to start the server
   val serverBinding: Future[Http.ServerBinding] = Http().bindAndHandle(routes, hostname, port)
@@ -76,5 +75,15 @@ object SpikedServer extends App /*with StaticContentRoutes*/ with WebSocketRoute
     )
 
     StaticContentRoutes(baseUrl, defaultPages, timeout).staticContentRoutes
+  }
+
+  private def webSocketRoutes: Route = {
+    val webSocketPath: String = Option(config.getString("http.webSocketPath")).getOrElse("")
+    log.info(s"web-socket route settings; web-socket path: $webSocketPath")
+    WebSocketRoutes(webSocketPath, networkManager, actorSystem).webSocketRoutes
+  }
+
+  private def networkManagementRoutes: Route = {
+    NetworkManagementRoutes("network-management", networkManager, actorSystem).networkManagementRoutes
   }
 }

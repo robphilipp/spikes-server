@@ -1,6 +1,7 @@
 package com.digitalcipher.spiked.json
 
 import com.digitalcipher.spiked.NetworkCommander.NetworkCommand
+import com.digitalcipher.spiked.routes.NetworkManagementRoutes.{CreateNetwork, CreateNetworkResponse}
 import spray.json.DefaultJsonProtocol
 
 object JsonSupport extends DefaultJsonProtocol {

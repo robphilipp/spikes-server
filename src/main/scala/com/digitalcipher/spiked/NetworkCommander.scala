@@ -1,17 +1,15 @@
 package com.digitalcipher.spiked
 
 import akka.actor.{Actor, ActorLogging, ActorRef, Cancellable, PoisonPill, Props}
-import akka.pattern.ask
 import akka.util.Timeout
-import com.digitalcipher.spiked.NetworkCommanderManager.AddNetwork
 import com.digitalcipher.spiked.NetworkCommander._
 import com.digitalcipher.spiked.json.JsonSupport._
 import spray.json._
 
-import scala.concurrent.{Await, ExecutionContextExecutor}
+import scala.concurrent.ExecutionContextExecutor
 import scala.util.Random
 
-class NetworkCommander(name: String, manager: ActorRef) extends Actor with ActorLogging {
+class NetworkCommander(id: String, manager: ActorRef) extends Actor with ActorLogging {
 
   implicit val executionContext: ExecutionContextExecutor = context.dispatcher
   import scala.concurrent.duration._
@@ -33,16 +31,10 @@ class NetworkCommander(name: String, manager: ActorRef) extends Actor with Actor
     // are decoupled, except through this actor. This source sends messages to the web-socket
     // sink, which sends them back to the UI client.
     case Build(outgoingMessageActor) =>
-      log.info(s"building network; name: $name")
+      log.info(s"building network commander; id: $id")
       // todo 1. build the actual spiked network
       //      2. connect to kafka
       //      3. stream topology messages to the outgoing message actor
-
-      // send the network manager the name of the network, which it will use to associate
-      // this actor (the sender) with the network name
-//      manager ! AddNetwork(name, self)
-      // blocking call
-//      Await.result(manager.ask(AddNetwork(name, self)), timeout.duration)
 
       // transition to the state where the network is built, but not yet running
       context.become(built(outgoingMessageActor))
@@ -56,7 +48,7 @@ class NetworkCommander(name: String, manager: ActorRef) extends Actor with Actor
   def built(outgoingMessageActor: ActorRef): Receive = {
     case IncomingMessage(text) => text.parseJson.convertTo match {
       case NetworkCommand("start") =>
-        log.info(s"starting network; name: $name")
+        log.info(s"starting network; id: $id")
 
         // todo ultimately, this will be replaced by a source from the kafka
         //    1. there are the network event (learning, spikes, membrane potential) messages
@@ -71,7 +63,7 @@ class NetworkCommander(name: String, manager: ActorRef) extends Actor with Actor
         context.become(running(outgoingMessageActor, System.currentTimeMillis(), cancellable))
 
       case NetworkCommand("destroy") =>
-        log.info(s"destroying network; name: $name")
+        log.info(s"destroying network; id: $id")
         outgoingMessageActor ! PoisonPill
 
       case NetworkCommand(command) => log.error(s"Invalid network command (waiting); command: $command")
@@ -87,12 +79,12 @@ class NetworkCommander(name: String, manager: ActorRef) extends Actor with Actor
     * @return a receive instance
     */
   def running(outgoingMessageActor: ActorRef, startTime: Long, cancellable: Cancellable): Receive = {
-    case SendMessage() =>
-      messages(10, startTime).foreach(message => outgoingMessageActor ! message)
+    // todo the number of neurons should not be hard coded; replace this with the flow from kafka
+    case SendMessage() => messages(10, startTime).foreach(message => outgoingMessageActor ! message)
 
     case IncomingMessage(text) => text.parseJson.convertTo match {
       case NetworkCommand("stop") =>
-        log.info(s"stopping network; name: $name")
+        log.info(s"stopping network; id: $id")
         cancellable.cancel()
         context.become(built(outgoingMessageActor))
 

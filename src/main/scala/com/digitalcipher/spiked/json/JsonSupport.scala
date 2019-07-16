@@ -1,18 +1,22 @@
 package com.digitalcipher.spiked.json
 
-import akka.http.scaladsl.marshallers.sprayjson.SprayJsonSupport
+import com.digitalcipher.spiked.NetworkCommander.NetworkCommand
+import com.digitalcipher.spiked.routes.NetworkManagementRoutes.{CreateNetwork, CreateNetworkResponse}
 import spray.json.DefaultJsonProtocol
 
-trait JsonSupport extends SprayJsonSupport {
-  // import the default encoders for primitive types (Int, String, Lists etc)
-  import DefaultJsonProtocol._
+object JsonSupport extends DefaultJsonProtocol {
 
-//  implicit val userJsonFormat: RootJsonFormat[User] = jsonFormat3(User)
-//  implicit val usersJsonFormat: RootJsonFormat[Users] = jsonFormat1(Users)
-//  implicit val userAgeJsonFormat: RootJsonFormat[UserAge] = jsonFormat1(UserAge)
-//
-//  implicit val actionPerformedJsonFormat: RootJsonFormat[ActionPerformed] = jsonFormat1(ActionPerformed)
-//
-//  implicit val bidFormat: RootJsonFormat[Bid] = jsonFormat2(Bid)
-//  implicit val bidsFormat: RootJsonFormat[Bids] = jsonFormat1(Bids)
+  import spray.json._
+
+  // import the default encoders for primitive types (Int, String, Lists etc)
+  implicit object NetworkCommandFormat extends RootJsonFormat[NetworkCommand] {
+    def write(command: NetworkCommand) = JsObject("command" -> JsString(command.command))
+
+    def read(value: JsValue): NetworkCommand = {
+      value.asJsObject.getFields("command") match {
+        case Seq(JsString(command)) => NetworkCommand(command)
+        case _ => deserializationError("NetworkCommand expected")
+      }
+    }
+  }
 }

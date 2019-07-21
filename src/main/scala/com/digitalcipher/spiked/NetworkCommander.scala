@@ -1,17 +1,36 @@
 package com.digitalcipher.spiked
 
-import akka.actor.{Actor, ActorLogging, ActorRef, Cancellable, PoisonPill, Props}
+import akka.{Done, NotUsed}
+import akka.actor.{Actor, ActorLogging, ActorRef, ActorSystem, Cancellable, PoisonPill, Props}
+import akka.kafka.scaladsl.Consumer
+import akka.kafka.scaladsl.Consumer.DrainingControl
+import akka.kafka.{ConsumerSettings, Subscriptions}
+import akka.remote.serialization.StringSerializer
+import akka.stream.ActorMaterializer
+import akka.stream.scaladsl.{Keep, Sink, Source}
 import akka.util.Timeout
 import com.digitalcipher.spiked.NetworkCommander._
 import com.digitalcipher.spiked.json.JsonSupport._
+import com.digitalcipher.spiked.routes.NetworkManagementRoutes.KafkaSettings
+import com.typesafe.config.Config
+import org.apache.kafka.clients.consumer.{ConsumerConfig, ConsumerRecord}
+import org.apache.kafka.common.serialization.{ByteArrayDeserializer, StringDeserializer}
 import spray.json._
 
-import scala.concurrent.ExecutionContextExecutor
+import scala.collection.immutable
+import scala.concurrent.{ExecutionContextExecutor, Future}
 import scala.util.Random
+import akka.stream.scaladsl._
 
-class NetworkCommander(id: String, manager: ActorRef) extends Actor with ActorLogging {
+class NetworkCommander(id: String,
+                       manager: ActorRef,
+                       kafkaConfig: Config,
+                       kafkaSettings: KafkaSettings
+                      ) extends Actor with ActorLogging {
 
   implicit val executionContext: ExecutionContextExecutor = context.dispatcher
+  implicit val materializer: ActorMaterializer = ActorMaterializer.create(context)
+
   import scala.concurrent.duration._
 
   implicit val timeout: Timeout = Timeout(1.seconds)
@@ -22,6 +41,7 @@ class NetworkCommander(id: String, manager: ActorRef) extends Actor with ActorLo
     * The initial state of the network actor. Once a connection is opened, transitions to
     * the `waiting(...)` method, which is handed the web-socket actor that serves as the sink
     * to this source
+    *
     * @return a receive instance
     */
   def uninitialized: Receive = {
@@ -42,16 +62,22 @@ class NetworkCommander(id: String, manager: ActorRef) extends Actor with ActorLo
 
   /**
     * State where the network is waiting to be started. At this point the network is already built.
+    *
     * @param outgoingMessageActor The web-socket actor passed from the uninitialized state.
     * @return a receive instance
     */
   def built(outgoingMessageActor: ActorRef): Receive = {
     case IncomingMessage(text) => text.parseJson.convertTo match {
       case NetworkCommand("start") =>
-        log.info(s"starting network; id: $id")
+        log.info(s"starting network; id: $id; kafka-settings: $kafkaSettings")
 
-        // todo ultimately, this will be replaced by a source from the kafka
-        //    1. there are the network event (learning, spikes, membrane potential) messages
+        // todo the topic has to be dynamic; spikes-1 is just for testing
+        val consumer: (Consumer.Control, Future[Done]) = Consumer
+          .plainSource(consumerSettings(id, kafkaSettings), Subscriptions.topics("spikes-1"))
+          .toMat(Sink.foreach(record => self ! SendRecord(record)))(Keep.both)
+          .run()
+
+        consumer._2.onComplete(_ => self ! SimulationStopped())
 
         // start the time and send messages every interval
         val cancellable = context.system.scheduler.schedule(
@@ -60,7 +86,7 @@ class NetworkCommander(id: String, manager: ActorRef) extends Actor with ActorLo
           receiver = self,
           SendMessage()
         )
-        context.become(running(outgoingMessageActor, System.currentTimeMillis(), cancellable))
+        context.become(running(outgoingMessageActor, System.currentTimeMillis(), cancellable, consumer))
 
       case NetworkCommand("destroy") =>
         log.info(s"destroying network; id: $id")
@@ -73,23 +99,39 @@ class NetworkCommander(id: String, manager: ActorRef) extends Actor with ActorLo
 
   /**
     * In this state, the network is running
+    *
     * @param outgoingMessageActor The web-socket actor to which to send the messages
-    * @param startTime The start time of the simulation (i.e. when the network transitioned to this state
-    * @param cancellable The cancellable for the scheduled (will disappear when data is coming from kafka)
+    * @param startTime            The start time of the simulation (i.e. when the network transitioned to this state
+    * @param cancellable          The cancellable for the scheduled (will disappear when data is coming from kafka)
     * @return a receive instance
     */
-  def running(outgoingMessageActor: ActorRef, startTime: Long, cancellable: Cancellable): Receive = {
+  def running(outgoingMessageActor: ActorRef,
+              startTime: Long,
+              cancellable: Cancellable,
+              consumer: (Consumer.Control, Future[Done])
+             ): Receive = {
     // todo the number of neurons should not be hard coded; replace this with the flow from kafka
-    case SendMessage() => messages(10, startTime).foreach(message => outgoingMessageActor ! message)
+    case SendMessage() =>
+      messages(10, startTime).foreach(message => outgoingMessageActor ! message)
 
-    case IncomingMessage(text) => text.parseJson.convertTo match {
-      case NetworkCommand("stop") =>
-        log.info(s"stopping network; id: $id")
-        cancellable.cancel()
-        context.become(built(outgoingMessageActor))
+    case SendRecord(record) =>
+      log.info(s"sending record: ${record.value().toString}")
+      outgoingMessageActor ! record.value().toString
 
-      case NetworkCommand(command) => log.error(s"Invalid network command (running); command: $command")
-    }
+    case SimulationStopped() =>
+      log.info(s"simulation completed; id: $id")
+      consumer._1.stop()
+
+    case IncomingMessage(text) =>
+      text.parseJson.convertTo match {
+        case NetworkCommand("stop") =>
+          log.info(s"stopping network; id: $id")
+          cancellable.cancel()
+          consumer._1.stop()
+          context.become(built(outgoingMessageActor))
+
+        case NetworkCommand(command) => log.error(s"Invalid network command (running); command: $command")
+      }
 
     case message => log.error(s"Invalid message type; message type: ${message.getClass.getName}")
   }
@@ -109,15 +151,32 @@ class NetworkCommander(id: String, manager: ActorRef) extends Actor with ActorLo
       .map(index => OutgoingMessage(s"out-$index,$fireTime,1"))
   }
 
+  private def consumerSettings(networkId: String, kafkaSettings: KafkaSettings): ConsumerSettings[String, String] = {
+    ConsumerSettings(kafkaConfig, new StringDeserializer, new StringDeserializer)
+      .withBootstrapServers(kafkaSettings.bootstrapServers.map(server => s"${server.host}:${server.port}").mkString(","))
+      .withGroupId(networkId)
+      .withProperty(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "true")
+  }
 }
 
 object NetworkCommander {
+
   sealed trait NetworkMessage
+
   case class Build(actor: ActorRef)
+
   case class IncomingMessage(text: String) extends NetworkMessage
+
   case class OutgoingMessage(text: String) extends NetworkMessage
+
   case class SendMessage() extends NetworkMessage
+
+  case class SimulationStopped() extends NetworkMessage
+
   case class NetworkCommand(command: String) extends NetworkMessage
 
-  def props(name: String, manager: ActorRef) = Props(new NetworkCommander(name, manager))
+  case class SendRecord(record: ConsumerRecord[String, String])
+
+  def props(name: String, manager: ActorRef, kafkaConfig: Config, kafkaSettings: KafkaSettings) =
+    Props(new NetworkCommander(name, manager, kafkaConfig, kafkaSettings))
 }

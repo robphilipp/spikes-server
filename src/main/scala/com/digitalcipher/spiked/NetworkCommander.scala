@@ -116,7 +116,7 @@ class NetworkCommander(id: String,
 
     case SendRecord(record) =>
       log.info(s"sending record: ${record.value().toString}")
-      outgoingMessageActor ! record.value().toString
+      outgoingMessageActor ! OutgoingMessage(record.value().toString)
 
     case SimulationStopped() =>
       log.info(s"simulation completed; id: $id")

@@ -1,26 +1,22 @@
 package com.digitalcipher.spiked
 
-import akka.{Done, NotUsed}
-import akka.actor.{Actor, ActorLogging, ActorRef, ActorSystem, Cancellable, PoisonPill, Props}
+import akka.Done
+import akka.actor.{Actor, ActorLogging, ActorRef, Cancellable, PoisonPill, Props}
 import akka.kafka.scaladsl.Consumer
-import akka.kafka.scaladsl.Consumer.DrainingControl
 import akka.kafka.{ConsumerSettings, Subscriptions}
-import akka.remote.serialization.StringSerializer
 import akka.stream.ActorMaterializer
-import akka.stream.scaladsl.{Keep, Sink, Source}
+import akka.stream.scaladsl.{Keep, Sink}
 import akka.util.Timeout
 import com.digitalcipher.spiked.NetworkCommander._
 import com.digitalcipher.spiked.json.JsonSupport._
 import com.digitalcipher.spiked.routes.NetworkManagementRoutes.KafkaSettings
 import com.typesafe.config.Config
 import org.apache.kafka.clients.consumer.{ConsumerConfig, ConsumerRecord}
-import org.apache.kafka.common.serialization.{ByteArrayDeserializer, StringDeserializer}
+import org.apache.kafka.common.serialization.StringDeserializer
 import spray.json._
 
-import scala.collection.immutable
 import scala.concurrent.{ExecutionContextExecutor, Future}
 import scala.util.Random
-import akka.stream.scaladsl._
 
 class NetworkCommander(id: String,
                        manager: ActorRef,
@@ -71,28 +67,30 @@ class NetworkCommander(id: String,
       case NetworkCommand("start") =>
         log.info(s"starting network; id: $id; kafka-settings: $kafkaSettings")
 
-        // todo the topic has to be dynamic; spikes-1 is just for testing
+        // todo the topic has to be dynamic; spikes-1 is just for testing, keys are just for testing
         val consumer: (Consumer.Control, Future[Done]) = Consumer
           .plainSource(consumerSettings(id, kafkaSettings), Subscriptions.topics("spikes-1"))
+          .filter(record => record.key() == "fire")
           .toMat(Sink.foreach(record => self ! SendRecord(record)))(Keep.both)
           .run()
 
         consumer._2.onComplete(_ => self ! SimulationStopped())
 
-        // start the time and send messages every interval
-        val cancellable = context.system.scheduler.schedule(
-          initialDelay = 0.seconds,
-          interval = 20.milliseconds,
-          receiver = self,
-          SendMessage()
-        )
-        context.become(running(outgoingMessageActor, System.currentTimeMillis(), cancellable, consumer))
+//        // start the time and send messages every interval
+//        val cancellable = context.system.scheduler.schedule(
+//          initialDelay = 0.seconds,
+//          interval = 20.milliseconds,
+//          receiver = self,
+//          SendMessage()
+//        )
+//        context.become(running(outgoingMessageActor, System.currentTimeMillis(), cancellable, consumer))
+        context.become(running(outgoingMessageActor, System.currentTimeMillis(), consumer))
 
       case NetworkCommand("destroy") =>
         log.info(s"destroying network; id: $id")
         outgoingMessageActor ! PoisonPill
 
-      case NetworkCommand(command) => log.error(s"Invalid network command (waiting); command: $command")
+      case NetworkCommand(command) => log.error(s"(built) Invalid network command; command: $command")
     }
     case _ => log.error(s"Invalid incoming message type")
   }
@@ -102,17 +100,17 @@ class NetworkCommander(id: String,
     *
     * @param outgoingMessageActor The web-socket actor to which to send the messages
     * @param startTime            The start time of the simulation (i.e. when the network transitioned to this state
-    * @param cancellable          The cancellable for the scheduled (will disappear when data is coming from kafka)
+//    * @param cancellable          The cancellable for the scheduled (will disappear when data is coming from kafka)
     * @return a receive instance
     */
   def running(outgoingMessageActor: ActorRef,
               startTime: Long,
-              cancellable: Cancellable,
+//              cancellable: Cancellable,
               consumer: (Consumer.Control, Future[Done])
              ): Receive = {
     // todo the number of neurons should not be hard coded; replace this with the flow from kafka
-    case SendMessage() =>
-      messages(10, startTime).foreach(message => outgoingMessageActor ! message)
+//    case SendMessage() =>
+//      messages(10, startTime).foreach(message => outgoingMessageActor ! message)
 
     case SendRecord(record) =>
       log.info(s"sending record: ${record.value().toString}")
@@ -126,30 +124,30 @@ class NetworkCommander(id: String,
       text.parseJson.convertTo match {
         case NetworkCommand("stop") =>
           log.info(s"stopping network; id: $id")
-          cancellable.cancel()
+//          cancellable.cancel()
           consumer._1.stop()
           context.become(built(outgoingMessageActor))
 
-        case NetworkCommand(command) => log.error(s"Invalid network command (running); command: $command")
+        case NetworkCommand(command) => log.error(s"(running) Invalid network command; command: $command")
       }
 
     case message => log.error(s"Invalid message type; message type: ${message.getClass.getName}")
   }
 
-  /**
-    * get a random number of messages (i.e. some random set of neurons spike)
-    *
-    * @param numNeurons The number of neurons for which signals are sent
-    * @return a list of text-messages
-    */
-  private def messages(numNeurons: Int, startTime: Long): List[OutgoingMessage] = {
-    val fireTime = System.currentTimeMillis() - startTime
-    val neuronsFiring = Random.nextInt(numNeurons)
-    Random
-      .shuffle(Range(0, numNeurons).toList)
-      .take(neuronsFiring)
-      .map(index => OutgoingMessage(s"out-$index,$fireTime,1"))
-  }
+//  /**
+//    * get a random number of messages (i.e. some random set of neurons spike)
+//    *
+//    * @param numNeurons The number of neurons for which signals are sent
+//    * @return a list of text-messages
+//    */
+//  private def messages(numNeurons: Int, startTime: Long): List[OutgoingMessage] = {
+//    val fireTime = System.currentTimeMillis() - startTime
+//    val neuronsFiring = Random.nextInt(numNeurons)
+//    Random
+//      .shuffle(Range(0, numNeurons).toList)
+//      .take(neuronsFiring)
+//      .map(index => OutgoingMessage(s"out-$index,$fireTime,1"))
+//  }
 
   private def consumerSettings(networkId: String, kafkaSettings: KafkaSettings): ConsumerSettings[String, String] = {
     ConsumerSettings(kafkaConfig, new StringDeserializer, new StringDeserializer)

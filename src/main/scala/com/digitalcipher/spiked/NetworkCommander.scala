@@ -41,7 +41,7 @@ class NetworkCommander(id: String,
     * @return a receive instance
     */
   def uninitialized: Receive = {
-    // builds the network when the connection is established. The wsActor is the web-socket
+    // builds the network when the connection is established. The "outgoingMessageActor" is the web-socket
     // actor to which messages are sent. Recall that the web-socket route has a handler, and
     // the handler returns a flow. The flow is a sink-to-source flow where the sink and source
     // are decoupled, except through this actor. This source sends messages to the web-socket
@@ -59,6 +59,16 @@ class NetworkCommander(id: String,
   /**
     * State where the network is waiting to be started. At this point the network is already built.
     *
+    * When a "start" message is received on the web-socket from the UI client:
+    * 1. the network is started,
+    * 2. creates an akka stream that subscribes to kafka and sends each message from kafka to itself
+    * once in the "running" state,
+    * 3. creates a handler to send a message to itself in the running state when the simulation has
+    * stopped or completed,
+    * 4. and then, finally, switches to the running state.
+    *
+    * If, on the other hand, this actor receives a "destroy" command, then destroys the network.
+    *
     * @param outgoingMessageActor The web-socket actor passed from the uninitialized state.
     * @return a receive instance
     */
@@ -67,6 +77,8 @@ class NetworkCommander(id: String,
       case NetworkCommand("start") =>
         log.info(s"starting network; id: $id; kafka-settings: $kafkaSettings")
 
+        // todo send a message to the network to start the simulation
+
         // todo the topic has to be dynamic; spikes-1 is just for testing, keys are just for testing
         val consumer: (Consumer.Control, Future[Done]) = Consumer
           .plainSource(consumerSettings(id, kafkaSettings), Subscriptions.topics("spikes-1"))
@@ -74,17 +86,11 @@ class NetworkCommander(id: String,
           .toMat(Sink.foreach(record => self ! SendRecord(record)))(Keep.both)
           .run()
 
+        // set up a handler for when the simulation is completed and has stopped
         consumer._2.onComplete(_ => self ! SimulationStopped())
 
-//        // start the time and send messages every interval
-//        val cancellable = context.system.scheduler.schedule(
-//          initialDelay = 0.seconds,
-//          interval = 20.milliseconds,
-//          receiver = self,
-//          SendMessage()
-//        )
-//        context.become(running(outgoingMessageActor, System.currentTimeMillis(), cancellable, consumer))
-        context.become(running(outgoingMessageActor, System.currentTimeMillis(), consumer))
+        // transition to the running state
+        context.become(running(outgoingMessageActor, System.currentTimeMillis(), consumer._1))
 
       case NetworkCommand("destroy") =>
         log.info(s"destroying network; id: $id")
@@ -96,21 +102,18 @@ class NetworkCommander(id: String,
   }
 
   /**
-    * In this state, the network is running
+    * In this state, the network is running.
     *
     * @param outgoingMessageActor The web-socket actor to which to send the messages
     * @param startTime            The start time of the simulation (i.e. when the network transitioned to this state
-//    * @param cancellable          The cancellable for the scheduled (will disappear when data is coming from kafka)
+    * @param consumerControl A tuple holding the consumer control, which can be used to stop the kafka consumer, and a future
+    *                 that is completed once the simulation is stopped or completed
     * @return a receive instance
     */
   def running(outgoingMessageActor: ActorRef,
               startTime: Long,
-//              cancellable: Cancellable,
-              consumer: (Consumer.Control, Future[Done])
+              consumerControl: Consumer.Control
              ): Receive = {
-    // todo the number of neurons should not be hard coded; replace this with the flow from kafka
-//    case SendMessage() =>
-//      messages(10, startTime).foreach(message => outgoingMessageActor ! message)
 
     case SendRecord(record) =>
       log.info(s"sending record: ${record.value().toString}")
@@ -118,14 +121,13 @@ class NetworkCommander(id: String,
 
     case SimulationStopped() =>
       log.info(s"simulation completed; id: $id")
-      consumer._1.stop()
+      consumerControl.stop()
 
     case IncomingMessage(text) =>
       text.parseJson.convertTo match {
         case NetworkCommand("stop") =>
           log.info(s"stopping network; id: $id")
-//          cancellable.cancel()
-          consumer._1.stop()
+          consumerControl.stop()
           context.become(built(outgoingMessageActor))
 
         case NetworkCommand(command) => log.error(s"(running) Invalid network command; command: $command")

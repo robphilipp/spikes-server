@@ -27,6 +27,7 @@ object SpikedServer extends App {
   private val config = ConfigFactory.parseResources("application.conf")
   private val hostname = config.getString("http.ip")
   private val port = config.getInt("http.port")
+  private val kafkaConfig = config.getConfig("akka.kafka.consumer")
 
   // set up ActorSystem and other dependencies here
   implicit val actorSystem: ActorSystem = ActorSystem("spiked-network-server")
@@ -38,7 +39,7 @@ object SpikedServer extends App {
 
   private lazy val log = Logging(actorSystem, getClass)
 
-  // create the combined routes (from WebSocketRoutes and StaticContentRoutes traits)
+  // create the combined routes
   lazy val routes: Route = webSocketRoutes ~ staticContentRoutes ~ networkManagementRoutes
 
   // attempt to start the server
@@ -84,6 +85,6 @@ object SpikedServer extends App {
   }
 
   private def networkManagementRoutes: Route = {
-    NetworkManagementRoutes("network-management", networkManager, actorSystem).networkManagementRoutes
+    NetworkManagementRoutes("network-management", networkManager, actorSystem, kafkaConfig).networkManagementRoutes
   }
 }

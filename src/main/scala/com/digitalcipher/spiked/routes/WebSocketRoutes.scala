@@ -14,7 +14,7 @@ import akka.stream.scaladsl.{Flow, Sink, Source}
 import akka.util.Timeout
 import com.digitalcipher.spiked
 import com.digitalcipher.spiked.NetworkCommander
-import com.digitalcipher.spiked.NetworkCommanderManager.RetrieveNetworkById
+import com.digitalcipher.spiked.NetworkCommanderManager.RetrieveNetworkCommanderById
 
 import scala.concurrent.Await
 import scala.concurrent.duration._
@@ -48,10 +48,10 @@ class WebSocketRoutes(webSocketPath: String, networkManager: ActorRef, actorSyst
   lazy val webSocketRoutes: Route = pathPrefix(webSocketPath / """[a-zA-Z0-9\-_]*""".r) { id =>
     Await
       // look up the network commander based on the specified ID
-      .result(networkManager.ask(RetrieveNetworkById(id)), timeout.duration)
+      .result(networkManager.ask(RetrieveNetworkCommanderById(id)), timeout.duration)
       .asInstanceOf[Either[String, ActorRef]] match {
         // found network commander, so construct the web socket route using with the network commander
-        case Right(actorRef: ActorRef) => handleWebSocketMessages(networkEventHandler(actorRef))
+        case Right(actorRef: ActorRef) => handleWebSocketMessages(networkCommanderEventHandler(actorRef))
 
         // network commander wasn't found, so return a flow with a single error message
         case Left(message) => handleWebSocketMessages(Flow.fromSinkAndSource(
@@ -67,10 +67,10 @@ class WebSocketRoutes(webSocketPath: String, networkManager: ActorRef, actorSyst
     * commander actor. The network commander actor processes the request and sends outgoing messages to the
     * web-socket client.
     *
-    * @param networkActor The actor reference of the network commander used to control the spikes network
+    * @param networkCommander The actor reference of the network commander used to control the spikes network
     * @return A sink-and-source flow where the sink and source are bridged by the network-commander actor
     */
-  private def networkEventHandler(networkActor: ActorRef): Flow[Message, Message, NotUsed] = {
+  private def networkCommanderEventHandler(networkCommander: ActorRef): Flow[Message, Message, NotUsed] = {
     // messages coming from the web-socket client
     val incomingMessages: Sink[Message, NotUsed] =
       Flow[Message]
@@ -78,23 +78,23 @@ class WebSocketRoutes(webSocketPath: String, networkManager: ActorRef, actorSyst
           case TextMessage.Strict(text) => NetworkCommander.IncomingMessage(text)
           case _ => // do nothing
         }
-        .to(Sink.actorRef(networkActor, PoisonPill))
+        .to(Sink.actorRef(networkCommander, PoisonPill))
 
     // messages that go out to the web-socket client
     val outgoingMessages: Source[Message, NotUsed] =
       Source
-        .actorRef[spiked.NetworkCommander.OutgoingMessage](10, OverflowStrategy.fail)
-        .mapMaterializedValue { outgoingMessageActor =>
+        .actorRef[NetworkCommander.OutgoingMessage](10, OverflowStrategy.fail)
+        .mapMaterializedValue({outgoingMessageActor =>
           // you need to send a Build message to get the actor in a state
           // where it's ready to receive and send messages, we used the mapMaterialized value
           // so we can get access to it as soon as this is materialized
-          networkActor ! NetworkCommander.Build(outgoingMessageActor)
+          networkCommander ! NetworkCommander.Build(outgoingMessageActor)
           NotUsed
-        }
-        .map {
+        })
+        .map({
           // Domain Model => WebSocket Message
           case NetworkCommander.OutgoingMessage(text) => TextMessage(text)
-        }
+        })
 
     // the flow that has a sink for incoming messages, an actor that serves as bridge between
     // the sink and the messages handed to the source (outgoing messages)

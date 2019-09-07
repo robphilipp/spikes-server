@@ -1,7 +1,7 @@
 package com.digitalcipher.spiked
 
 import akka.Done
-import akka.actor.{Actor, ActorLogging, ActorRef, Cancellable, PoisonPill, Props}
+import akka.actor.{Actor, ActorLogging, ActorRef, PoisonPill, Props}
 import akka.kafka.scaladsl.Consumer
 import akka.kafka.{ConsumerSettings, Subscriptions}
 import akka.stream.ActorMaterializer
@@ -16,7 +16,6 @@ import org.apache.kafka.common.serialization.StringDeserializer
 import spray.json._
 
 import scala.concurrent.{ExecutionContextExecutor, Future}
-import scala.util.Random
 
 class NetworkCommander(id: String,
                        manager: ActorRef,

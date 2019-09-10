@@ -8,7 +8,10 @@ import akka.http.scaladsl.server.Directives._
 import akka.http.scaladsl.server.Route
 import akka.util.Timeout
 import com.digitalcipher.spiked.NetworkCommander
+import com.digitalcipher.spiked.NetworkCommander.Build
 import com.digitalcipher.spiked.NetworkCommanderManager.{AddNetworkCommander, DeleteNetworkCommander}
+import com.digitalcipher.spiked.apputils.SeriesRunner
+import com.digitalcipher.spiked.apputils.SeriesRunner.KafkaEventLogging
 import com.digitalcipher.spiked.json.NetworkManagementJsonSupport
 import com.digitalcipher.spiked.routes.NetworkManagementRoutes.{CreateNetworkCommander, CreateNetworkCommanderResponse, DeleteNetworkCommanderResponse}
 import com.typesafe.config.Config
@@ -20,7 +23,8 @@ import scala.util.Random
 class NetworkManagementRoutes(networkManagePath: String,
                               networkCommanderManager: ActorRef,
                               actorSystem: ActorSystem,
-                              kafkaConfig: Config) extends NetworkManagementJsonSupport {
+//                              serverConfig: Config,
+                              kafkaConsumerConfig: Config) extends NetworkManagementJsonSupport {
 
   import scala.concurrent.duration._
 
@@ -29,16 +33,33 @@ class NetworkManagementRoutes(networkManagePath: String,
   // todo add delete route to delete a network-commander based on a network ID
   //  lazy val networkManagementRoutes: Route = pathPrefix(networkManagePath / "network") {
   lazy val networkManagementRoutes: Route = concat(
+    // create a network commander and build the network
     path(networkManagePath / "network") {
       post {
         entity(as[CreateNetworkCommander]) { request =>
           // create an ID for the network from a random number
           val id = s"${Random.nextLong()}-${System.currentTimeMillis()}".getBytes.map("%02X".format(_)).mkString
 
+//          val seriesRunner = new SeriesRunner(
+//            timeFactor = 1,
+//            appLoggerName = "spikes-network-server",
+//            config = serverConfig,
+//            systemBaseName = id,
+//            eventLogging = Seq(KafkaEventLogging())
+//          )
+
           // creates the network commander actor
           val networkCommander = actorSystem.actorOf(NetworkCommander.props(
-            id, networkCommanderManager, kafkaConfig, request.kafkaSettings)
-          )
+            name = id,
+            manager = networkCommanderManager,
+            kafkaConfig = kafkaConsumerConfig,
+            kafkaSettings = request.kafkaSettings,
+            networkDescription = request.networkDescription
+          ))
+
+//          val network: SeriesRunner.CreateNetworkResult = Await
+//            .result(networkCommander.ask(Build(seriesRunner)), timeout.duration)
+//            .asInstanceOf[SeriesRunner.CreateNetworkResult]
 
           // registers the network commander manager with the manager
           Await.result(networkCommanderManager.ask(AddNetworkCommander(id, networkCommander)), timeout.duration)
@@ -49,6 +70,8 @@ class NetworkManagementRoutes(networkManagePath: String,
         }
       }
     },
+
+    // delete the network commander
     path(networkManagePath / "network" / Segment) { networkId =>
       delete {
         Await.result(networkCommanderManager.ask(DeleteNetworkCommander(networkId)), timeout.duration)
@@ -57,41 +80,11 @@ class NetworkManagementRoutes(networkManagePath: String,
       }
     }
   )
-  //  lazy val networkManagementRoutes: Route = path(networkManagePath / "network") {
-  //    concat(
-  //      post {
-  //        entity(as[CreateNetworkCommander]) { request =>
-  //          // create an ID for the network from a random number
-  //          val id = s"${Random.nextLong()}-${System.currentTimeMillis()}".getBytes.map("%02X".format(_)).mkString
-  //
-  //          // creates the network commander actor
-  //          val networkCommander = actorSystem.actorOf(NetworkCommander.props(
-  //            id, networkCommanderManager, kafkaConfig, request.kafkaSettings)
-  //          )
-  //
-  //          // registers the network commander manager with the manager
-  //          Await.result(networkCommanderManager.ask(AddNetworkCommander(id, networkCommander)), timeout.duration)
-  //
-  //          // todo once the UI sends the network description, then have to build the network, and use that
-  //          // to return the size of the network
-  //          complete(CreateNetworkCommanderResponse(id, request.networkDescription))
-  //        }
-  //      },
-  //      path(Segment) { networkId =>
-  //        delete {
-  //          Await.result(networkCommanderManager.ask(DeleteNetworkCommander(networkId)), timeout.duration)
-  //
-  //          complete(DeleteNetworkCommanderResponse(networkId))
-  //        }
-  //      }
-  //    )
-  //  }
-
 }
 
 object NetworkManagementRoutes {
-  def apply(networkManagePath: String, networkManager: ActorRef, actorSystem: ActorSystem, kafkaConfig: Config) =
-    new NetworkManagementRoutes(networkManagePath, networkManager, actorSystem, kafkaConfig: Config)
+  def apply(networkManagePath: String, networkManager: ActorRef, actorSystem: ActorSystem/*, serverConfig: Config*/, kafkaConfig: Config) =
+    new NetworkManagementRoutes(networkManagePath, networkManager, actorSystem/*, serverConfig*/, kafkaConfig)
 
   trait NetworkManagementRequest
 

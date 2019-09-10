@@ -24,8 +24,9 @@ class NetworkCommanderManager extends Actor with ActorLogging {
 
   /**
     * Updates the network-commanders by adding the new network when receiving the [[AddNetworkCommander]] message,
-    * retrieving the network-commanders' actor reference when receiving the [[RetrieveNetworkCommanderById]] message, and
-    * removes the network-commander from management when receiving the actor's [[Terminated]] message.
+    * retrieving the network-commanders' actor reference when receiving the [[RetrieveNetworkCommanderById]] message,
+    * stopping and deleting a network commander when receiving the [[DeleteNetworkCommander]] message,  and
+    * removing the network-commander from management when receiving the actor's [[Terminated]] message.
     *
     * @param ids               The map holding the association of the network IDs to the network actor references
     * @param networkCommanders The map holding association of network's actor references to the network IDs
@@ -34,9 +35,17 @@ class NetworkCommanderManager extends Actor with ActorLogging {
   final def updateNetworkCommanders(ids: Map[String, ActorRef], networkCommanders: Map[ActorRef, String]): Receive = {
     case AddNetworkCommander(id: String, networkCommander: ActorRef) =>
       log.info(s"Adding network commander; network ID: $id")
+
+      // watch the network commander so that we receive a "Terminated" message when the
+      // network commander is stopped
       watch(networkCommander)
+
+      // return the ID of the network commander
       sender() ! AddedNetworkCommander(id)
+
+      // update the state
       become(updateNetworkCommanders(ids + (id -> networkCommander), networkCommanders + (networkCommander -> id)))
+
 
     case RetrieveNetworkCommanderById(id: String) =>
       // find the managed network for the specified ID. If found, then returns the
@@ -47,11 +56,17 @@ class NetworkCommanderManager extends Actor with ActorLogging {
       sender() ! networkCommander
       log.info(s"Requested network for ID $id")
 
+
     case DeleteNetworkCommander(id: String) =>
+      // sends a poison pill to the network commander to stop it
       log.info(s"Sending poison pill to network commander; network ID: $id")
       ids.get(id).foreach(networkCommander => networkCommander ! PoisonPill)
 
+      // returns the ID of the network commander that was deleted. we don't need to update the state
+      // here because we are watching the network commander, and will receive a "Terminated" message
+      // from akka when the network commander is actually stopped
       sender() ! DeleteNetworkCommander(id)
+
 
     case Terminated(networkCommander: ActorRef) =>
       // grab the network ID, and if found update the maps by removing the network ID and the

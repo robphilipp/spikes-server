@@ -8,6 +8,7 @@ import akka.stream.ActorMaterializer
 import akka.stream.scaladsl.{Keep, Sink}
 import akka.util.Timeout
 import com.digitalcipher.spiked.NetworkCommander._
+import com.digitalcipher.spiked.apputils.SeriesRunner
 import com.digitalcipher.spiked.json.JsonSupport._
 import com.digitalcipher.spiked.routes.NetworkManagementRoutes.KafkaSettings
 import com.typesafe.config.Config
@@ -18,6 +19,7 @@ import spray.json._
 import scala.concurrent.{ExecutionContextExecutor, Future}
 
 class NetworkCommander(id: String,
+                       networkDescription: String,
                        manager: ActorRef,
                        kafkaConfig: Config,
                        kafkaSettings: KafkaSettings
@@ -39,21 +41,60 @@ class NetworkCommander(id: String,
     *
     * @return a receive instance
     */
+//  def uninitialized: Receive = {
+//    // builds the network when the connection is established. The "outgoingMessageActor" is the web-socket
+//    // actor to which messages are sent. Recall that the web-socket route has a handler, and
+//    // the handler returns a flow. The flow is a sink-to-source flow where the sink and source
+//    // are decoupled, except through this actor. This source sends messages to the web-socket
+//    // sink, which sends them back to the UI client.
+//    case Build(seriesRunner) =>
+//      log.info(s"building network commander; id: $id")
+//      // todo 1. build the actual spiked network
+//      //      2. connect to kafka
+//      //      3. stream topology messages to the outgoing message actor
+//      val networkResults = seriesRunner.createNetworks(num = 1, dnaFile = networkDescription, reparseReport = false)
+//      if(networkResults.hasFailures) {
+//        seriesRunner.logger.error(s"Failed to create all networks")
+//      }
+//
+//      sender() ! networkResults.successes.head
+//
+//      // transition to the state where the network is built, but not yet running
+//      context.become(built(networkResults))
+//  }
   def uninitialized: Receive = {
     // builds the network when the connection is established. The "outgoingMessageActor" is the web-socket
     // actor to which messages are sent. Recall that the web-socket route has a handler, and
     // the handler returns a flow. The flow is a sink-to-source flow where the sink and source
     // are decoupled, except through this actor. This source sends messages to the web-socket
     // sink, which sends them back to the UI client.
-    case Build(outgoingMessageActor) =>
+    case Build(outgoingMessageActor, seriesRunner) =>
       log.info(s"building network commander; id: $id")
       // todo 1. build the actual spiked network
       //      2. connect to kafka
       //      3. stream topology messages to the outgoing message actor
+      val networkResults = seriesRunner.createNetworks(num = 1, dnaFile = networkDescription, reparseReport = false)
+      if(networkResults.hasFailures) {
+        seriesRunner.logger.error(s"Failed to create all networks")
+      }
+      // todo deal with the error condition properly
+
+      val consumer: (Consumer.Control, Future[Done]) = Consumer
+        .plainSource(consumerSettings(id, kafkaSettings), Subscriptions.topics("spikes-1"))
+        .filter(record => record.key() == "fire")
+        .toMat(Sink.foreach(record => self ! SendRecord(record)))(Keep.both)
+        .run()
+
+      // set up a handler for when the simulation is completed and has stopped
+      consumer._2.onComplete(_ => self ! SimulationStopped())
 
       // transition to the state where the network is built, but not yet running
-      context.become(built(outgoingMessageActor))
+      context.become(built(outgoingMessageActor, networkResults, consumer._1))
   }
+
+//  def built(networkResults: SeriesRunner.CreateNetworkResults): Receive = {
+//    case Link(outgoingMessageActor) => context.become(linked(outgoingMessageActor, networkResults))
+//  }
 
   /**
     * State where the network is waiting to be started. At this point the network is already built.
@@ -71,7 +112,12 @@ class NetworkCommander(id: String,
     * @param outgoingMessageActor The web-socket actor passed from the uninitialized state.
     * @return a receive instance
     */
-  def built(outgoingMessageActor: ActorRef): Receive = {
+//  def built(outgoingMessageActor: ActorRef): Receive = {
+//  def linked(outgoingMessageActor: ActorRef, networkResults: SeriesRunner.CreateNetworkResults): Receive = {
+  def built(outgoingMessageActor: ActorRef,
+            networkResults: SeriesRunner.CreateNetworkResults,
+            consumerControl: Consumer.Control
+           ): Receive = {
     case IncomingMessage(text) => text.parseJson.convertTo match {
       case NetworkCommand("start") =>
         log.info(s"starting network; id: $id; kafka-settings: $kafkaSettings")
@@ -79,17 +125,18 @@ class NetworkCommander(id: String,
         // todo send a message to the network to start the simulation
 
         // todo the topic has to be dynamic; spikes-1 is just for testing, keys are just for testing
-        val consumer: (Consumer.Control, Future[Done]) = Consumer
-          .plainSource(consumerSettings(id, kafkaSettings), Subscriptions.topics("spikes-1"))
-          .filter(record => record.key() == "fire")
-          .toMat(Sink.foreach(record => self ! SendRecord(record)))(Keep.both)
-          .run()
-
-        // set up a handler for when the simulation is completed and has stopped
-        consumer._2.onComplete(_ => self ! SimulationStopped())
+//        val consumer: (Consumer.Control, Future[Done]) = Consumer
+//          .plainSource(consumerSettings(id, kafkaSettings), Subscriptions.topics("spikes-1"))
+//          .filter(record => record.key() == "fire")
+//          .toMat(Sink.foreach(record => self ! SendRecord(record)))(Keep.both)
+//          .run()
+//
+//        // set up a handler for when the simulation is completed and has stopped
+//        consumer._2.onComplete(_ => self ! SimulationStopped())
 
         // transition to the running state
-        context.become(running(outgoingMessageActor, System.currentTimeMillis(), consumer._1))
+//        context.become(running(outgoingMessageActor, System.currentTimeMillis(), consumer._1, networkResults))
+        context.become(running(outgoingMessageActor, System.currentTimeMillis(), consumerControl, networkResults))
 
       case NetworkCommand("destroy") =>
         log.info(s"destroying network; id: $id")
@@ -111,7 +158,8 @@ class NetworkCommander(id: String,
     */
   def running(outgoingMessageActor: ActorRef,
               startTime: Long,
-              consumerControl: Consumer.Control
+              consumerControl: Consumer.Control,
+              networkResults: SeriesRunner.CreateNetworkResults
              ): Receive = {
 
     case SendRecord(record) =>
@@ -127,7 +175,8 @@ class NetworkCommander(id: String,
         case NetworkCommand("stop") =>
           log.info(s"stopping network; id: $id")
           consumerControl.stop()
-          context.become(built(outgoingMessageActor))
+//          context.become(built(outgoingMessageActor))
+          context.become(built(outgoingMessageActor, networkResults, consumerControl))
 
         case NetworkCommand(command) => log.error(s"(running) Invalid network command; command: $command")
       }
@@ -162,7 +211,10 @@ object NetworkCommander {
 
   sealed trait NetworkMessage
 
-  case class Build(actor: ActorRef)
+  case class Build(actor: ActorRef, seriesRunner: SeriesRunner)
+//  case class Build(seriesRunner: SeriesRunner)
+
+  case class Link(actor: ActorRef)
 
   case class IncomingMessage(text: String) extends NetworkMessage
 
@@ -176,6 +228,6 @@ object NetworkCommander {
 
   case class SendRecord(record: ConsumerRecord[String, String])
 
-  def props(name: String, manager: ActorRef, kafkaConfig: Config, kafkaSettings: KafkaSettings) =
-    Props(new NetworkCommander(name, manager, kafkaConfig, kafkaSettings))
+  def props(name: String, networkDescription: String, manager: ActorRef, kafkaConfig: Config, kafkaSettings: KafkaSettings) =
+    Props(new NetworkCommander(name, networkDescription, manager, kafkaConfig, kafkaSettings))
 }

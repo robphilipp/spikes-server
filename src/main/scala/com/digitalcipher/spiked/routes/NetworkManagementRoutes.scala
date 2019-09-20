@@ -8,7 +8,7 @@ import akka.http.scaladsl.server.Directives._
 import akka.http.scaladsl.server.Route
 import akka.util.Timeout
 import com.digitalcipher.spiked.NetworkCommander
-import com.digitalcipher.spiked.NetworkCommander.Build
+import com.digitalcipher.spiked.NetworkCommander.BuildNetwork
 import com.digitalcipher.spiked.NetworkCommanderManager.{AddNetworkCommander, DeleteNetworkCommander}
 import com.digitalcipher.spiked.apputils.SeriesRunner
 import com.digitalcipher.spiked.apputils.SeriesRunner.KafkaEventLogging

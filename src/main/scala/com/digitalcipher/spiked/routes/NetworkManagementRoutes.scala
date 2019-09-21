@@ -37,8 +37,11 @@ class NetworkManagementRoutes(networkManagePath: String,
     path(networkManagePath / "network") {
       post {
         entity(as[CreateNetworkCommander]) { request =>
-          // create an ID for the network from a random number
-          val id = s"${Random.nextLong()}-${System.currentTimeMillis()}".getBytes.map("%02X".format(_)).mkString
+          // create an ID for the network from a random number and the current time
+          val id = Base64
+            .getUrlEncoder
+            .encodeToString(s"${Random.nextInt()}-${System.currentTimeMillis()}".getBytes)
+            .replace("=", "")
 
 //          val seriesRunner = new SeriesRunner(
 //            timeFactor = 1,

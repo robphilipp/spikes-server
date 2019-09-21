@@ -34,6 +34,27 @@ class NetworkCommander(id: String,
 
   override def receive: Receive = uninitialized
 
+  //  def uninitialized: Receive = {
+  //    // builds the network when the connection is established. The "outgoingMessageActor" is the web-socket
+  //    // actor to which messages are sent. Recall that the web-socket route has a handler, and
+  //    // the handler returns a flow. The flow is a sink-to-source flow where the sink and source
+  //    // are decoupled, except through this actor. This source sends messages to the web-socket
+  //    // sink, which sends them back to the UI client.
+  //    case Build(seriesRunner) =>
+  //      log.info(s"building network commander; id: $id")
+  //      // todo 1. build the actual spiked network
+  //      //      2. connect to kafka
+  //      //      3. stream topology messages to the outgoing message actor
+  //      val networkResults = seriesRunner.createNetworks(num = 1, dnaFile = networkDescription, reparseReport = false)
+  //      if(networkResults.hasFailures) {
+  //        seriesRunner.logger.error(s"Failed to create all networks")
+  //      }
+  //
+  //      sender() ! networkResults.successes.head
+  //
+  //      // transition to the state where the network is built, but not yet running
+  //      context.become(built(networkResults))
+  //  }
   /**
     * The initial state of the network actor. Once a connection is opened, transitions to
     * the `waiting(...)` method, which is handed the web-socket actor that serves as the sink
@@ -41,27 +62,6 @@ class NetworkCommander(id: String,
     *
     * @return a receive instance
     */
-//  def uninitialized: Receive = {
-//    // builds the network when the connection is established. The "outgoingMessageActor" is the web-socket
-//    // actor to which messages are sent. Recall that the web-socket route has a handler, and
-//    // the handler returns a flow. The flow is a sink-to-source flow where the sink and source
-//    // are decoupled, except through this actor. This source sends messages to the web-socket
-//    // sink, which sends them back to the UI client.
-//    case Build(seriesRunner) =>
-//      log.info(s"building network commander; id: $id")
-//      // todo 1. build the actual spiked network
-//      //      2. connect to kafka
-//      //      3. stream topology messages to the outgoing message actor
-//      val networkResults = seriesRunner.createNetworks(num = 1, dnaFile = networkDescription, reparseReport = false)
-//      if(networkResults.hasFailures) {
-//        seriesRunner.logger.error(s"Failed to create all networks")
-//      }
-//
-//      sender() ! networkResults.successes.head
-//
-//      // transition to the state where the network is built, but not yet running
-//      context.become(built(networkResults))
-//  }
   def uninitialized: Receive = {
     // builds the network when the connection is established. The "outgoingMessageActor" is the web-socket
     // actor to which messages are sent. Recall that the web-socket route has a handler, and
@@ -73,9 +73,9 @@ class NetworkCommander(id: String,
       // todo 1. build the actual spiked network
       //      2. connect to kafka
       //      3. stream topology messages to the outgoing message actor
-      val networkResults = seriesRunner.createNetworks(num = 1, dnaFile = networkDescription, reparseReport = false)
+      val networkResults = seriesRunner.createNetworks(num = 1, description = networkDescription, reparseReport = false)
       if(networkResults.hasFailures) {
-        seriesRunner.logger.error(s"Failed to create all networks")
+        seriesRunner.logger.error(s"Failed to create all networks; failures: ${networkResults.failures.mkString}")
       }
       // todo deal with the error condition properly
 
@@ -92,12 +92,33 @@ class NetworkCommander(id: String,
       consumer._2.onComplete(_ => self ! SimulationStopped())
 
       // transition to the state where the network is built, but not yet running
-      context.become(built(outgoingMessageActor, networkResults, consumer._1, seriesRunner))
+      context.become(ready(outgoingMessageActor, networkResults, consumer._1, seriesRunner))
   }
 
-//  def built(networkResults: SeriesRunner.CreateNetworkResults): Receive = {
-//    case Link(outgoingMessageActor) => context.become(linked(outgoingMessageActor, networkResults))
-//  }
+  /**
+    * The "ready" state is once the network has been built and the server is waiting for websocket
+    * command to transition it into the built state.
+    * @param outgoingMessageActor The web-socket actor passed from the uninitialized state.
+    * @param networkResults The results of building the spikes network
+    * @param consumerControl The consumer control that allows the simulation to be stopped and
+    *                        when the simulation is complete, dispatches message that the simulation
+    *                        has stopped
+    * @param seriesRunner The spikes network runner that runs the simulation
+    * @return A receive instance
+    */
+  def ready(outgoingMessageActor: ActorRef,
+            networkResults: SeriesRunner.CreateNetworkResults,
+            consumerControl: Consumer.Control,
+            seriesRunner: SeriesRunner
+           ): Receive = {
+    case IncomingMessage(text) => text.parseJson.convertTo match {
+      case NetworkCommand("built") =>
+        log.info(s"network built and ready to run; id: $id; kafka-settings: $kafkaSettings")
+        context.become(built(outgoingMessageActor, networkResults, consumerControl, seriesRunner))
+
+      case NetworkCommand(command) => log.error(s"(ready) Invalid network command; command: $command")
+    }
+  }
 
   /**
     * State where the network is waiting to be started. At this point the network is already built.
@@ -112,21 +133,15 @@ class NetworkCommander(id: String,
     *
     * If, on the other hand, this actor receives a "destroy" command, then destroys the network.
     *
-    * @param outgoingMessageActor The web-socket actor passed from the uninitialized state.
+    * @param outgoingMessageActor The web-socket actor passed from the ready state.
     * @return a receive instance
     */
-//  def built(outgoingMessageActor: ActorRef): Receive = {
-//  def linked(outgoingMessageActor: ActorRef, networkResults: SeriesRunner.CreateNetworkResults): Receive = {
   def built(outgoingMessageActor: ActorRef,
             networkResults: SeriesRunner.CreateNetworkResults,
             consumerControl: Consumer.Control,
             seriesRunner: SeriesRunner
            ): Receive = {
     case IncomingMessage(text) => text.parseJson.convertTo match {
-
-      case NetworkCommand("built") =>
-        log.info(s"network built and ready to run; id: $id; kafka-settings: $kafkaSettings")
-        context.become(built(outgoingMessageActor, networkResults, consumerControl, seriesRunner))
 
       case NetworkCommand("start") =>
         log.info(s"starting network; id: $id; kafka-settings: $kafkaSettings")

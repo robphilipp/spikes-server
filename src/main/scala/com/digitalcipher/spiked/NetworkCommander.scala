@@ -34,27 +34,6 @@ class NetworkCommander(id: String,
 
   override def receive: Receive = uninitialized
 
-  //  def uninitialized: Receive = {
-  //    // builds the network when the connection is established. The "outgoingMessageActor" is the web-socket
-  //    // actor to which messages are sent. Recall that the web-socket route has a handler, and
-  //    // the handler returns a flow. The flow is a sink-to-source flow where the sink and source
-  //    // are decoupled, except through this actor. This source sends messages to the web-socket
-  //    // sink, which sends them back to the UI client.
-  //    case Build(seriesRunner) =>
-  //      log.info(s"building network commander; id: $id")
-  //      // todo 1. build the actual spiked network
-  //      //      2. connect to kafka
-  //      //      3. stream topology messages to the outgoing message actor
-  //      val networkResults = seriesRunner.createNetworks(num = 1, dnaFile = networkDescription, reparseReport = false)
-  //      if(networkResults.hasFailures) {
-  //        seriesRunner.logger.error(s"Failed to create all networks")
-  //      }
-  //
-  //      sender() ! networkResults.successes.head
-  //
-  //      // transition to the state where the network is built, but not yet running
-  //      context.become(built(networkResults))
-  //  }
   /**
     * The initial state of the network actor. Once a connection is opened, transitions to
     * the `waiting(...)` method, which is handed the web-socket actor that serves as the sink
@@ -69,37 +48,32 @@ class NetworkCommander(id: String,
     // are decoupled, except through this actor. This source sends messages to the web-socket
     // sink, which sends them back to the UI client.
     case BuildNetwork(outgoingMessageActor, seriesRunner) =>
-      log.info(s"building network commander; id: $id")
-      // todo 1. build the actual spiked network
-      //      2. connect to kafka
-      //      3. stream topology messages to the outgoing message actor
-      val networkResults = seriesRunner.createNetworks(num = 1, description = networkDescription, reparseReport = false)
-      if(networkResults.hasFailures) {
-        seriesRunner.logger.error(s"Failed to create all networks; failures: ${networkResults.failures.mkString}")
-      }
-      // todo deal with the error condition properly
-
       // as the network is being built, it will publish messages describing the network. so at this
       // point we already need to start consuming the messages and sending them down the websocket
       // to the client UI.
       val consumer: (Consumer.Control, Future[Done]) = Consumer
         .plainSource(consumerSettings(id, kafkaSettings), Subscriptions.topics("spikes-1"))
-//        .filter(record => record.key() == "fire")
-        .toMat(Sink.foreach(record => self ! SendRecord(record)))(Keep.both)
+        //        .filter(record => record.key() == "fire")
+//        .toMat(Sink.foreach(record => self ! SendRecord(record)))(Keep.both)
+        .toMat(Sink.foreach(record => {
+          log.info(s"sending record: ${record.value().toString}")
+          outgoingMessageActor ! OutgoingMessage(record.value().toString)
+        }))(Keep.both)
         .run()
 
       // set up a handler for when the simulation is completed and has stopped
       consumer._2.onComplete(_ => self ! SimulationStopped())
 
+      // todo deal with the error condition properly
+
       // transition to the state where the network is built, but not yet running
-      context.become(ready(outgoingMessageActor, networkResults, consumer._1, seriesRunner))
+      context.become(ready(outgoingMessageActor/*, networkResults*/, consumer._1, seriesRunner))
   }
 
   /**
     * The "ready" state is once the network has been built and the server is waiting for websocket
     * command to transition it into the built state.
     * @param outgoingMessageActor The web-socket actor passed from the uninitialized state.
-    * @param networkResults The results of building the spikes network
     * @param consumerControl The consumer control that allows the simulation to be stopped and
     *                        when the simulation is complete, dispatches message that the simulation
     *                        has stopped
@@ -107,13 +81,20 @@ class NetworkCommander(id: String,
     * @return A receive instance
     */
   def ready(outgoingMessageActor: ActorRef,
-            networkResults: SeriesRunner.CreateNetworkResults,
             consumerControl: Consumer.Control,
             seriesRunner: SeriesRunner
            ): Receive = {
     case IncomingMessage(text) => text.parseJson.convertTo match {
       case NetworkCommand("built") =>
-        log.info(s"network built and ready to run; id: $id; kafka-settings: $kafkaSettings")
+        log.info(s"(ready) building network commander; id: $id")
+
+        // build the network
+        val networkResults = seriesRunner.createNetworks(num = 1, description = networkDescription, reparseReport = false)
+        if(networkResults.hasFailures) {
+          seriesRunner.logger.error(s"Failed to create all networks; failures: ${networkResults.failures.mkString}")
+        }
+
+        log.info(s"(ready) network built and ready to run; id: $id; kafka-settings: $kafkaSettings")
         context.become(built(outgoingMessageActor, networkResults, consumerControl, seriesRunner))
 
       case NetworkCommand(command) => log.error(s"(ready) Invalid network command; command: $command")
@@ -144,31 +125,22 @@ class NetworkCommander(id: String,
     case IncomingMessage(text) => text.parseJson.convertTo match {
 
       case NetworkCommand("start") =>
-        log.info(s"starting network; id: $id; kafka-settings: $kafkaSettings")
+        log.info(s"(built) starting network; id: $id; kafka-settings: $kafkaSettings")
 
         // todo start the simulation
 //        seriesRunner.runSimulationSeries(networkResults, , )
 
-        // todo the topic has to be dynamic; spikes-1 is just for testing, keys are just for testing
-//        val consumer: (Consumer.Control, Future[Done]) = Consumer
-//          .plainSource(consumerSettings(id, kafkaSettings), Subscriptions.topics("spikes-1"))
-//          .filter(record => record.key() == "fire")
-//          .toMat(Sink.foreach(record => self ! SendRecord(record)))(Keep.both)
-//          .run()
-//
-//        // set up a handler for when the simulation is completed and has stopped
-//        consumer._2.onComplete(_ => self ! SimulationStopped())
 
         // transition to the running state
-//        context.become(running(outgoingMessageActor, System.currentTimeMillis(), consumer._1, networkResults))
         context.become(running(outgoingMessageActor, System.currentTimeMillis(), consumerControl, networkResults, seriesRunner))
 
       case NetworkCommand("destroy") =>
-        log.info(s"destroying network; id: $id")
+        log.info(s"(built) destroying network; id: $id")
         outgoingMessageActor ! PoisonPill
 
       case NetworkCommand(command) => log.error(s"(built) Invalid network command; command: $command")
     }
+
     case _ => log.error(s"Invalid incoming message type")
   }
 
@@ -188,18 +160,18 @@ class NetworkCommander(id: String,
               seriesRunner: SeriesRunner
              ): Receive = {
 
-    case SendRecord(record) =>
-      log.info(s"sending record: ${record.value().toString}")
-      outgoingMessageActor ! OutgoingMessage(record.value().toString)
-
+//    case SendRecord(record) =>
+//      log.info(s"(running) sending record: ${record.value().toString}")
+//      outgoingMessageActor ! OutgoingMessage(record.value().toString)
+//
     case SimulationStopped() =>
-      log.info(s"simulation completed; id: $id")
+      log.info(s"(running) simulation completed; id: $id")
       consumerControl.stop()
 
     case IncomingMessage(text) =>
       text.parseJson.convertTo match {
         case NetworkCommand("stop") =>
-          log.info(s"stopping network; id: $id")
+          log.info(s"(running) stopping network; id: $id")
           consumerControl.stop()
 //          context.become(built(outgoingMessageActor))
           context.become(built(outgoingMessageActor, networkResults, consumerControl, seriesRunner))
@@ -207,7 +179,7 @@ class NetworkCommander(id: String,
         case NetworkCommand(command) => log.error(s"(running) Invalid network command; command: $command")
       }
 
-    case message => log.error(s"Invalid message type; message type: ${message.getClass.getName}")
+    case message => log.error(s"(running) Invalid message type; message type: ${message.getClass.getName}")
   }
 
 //  /**
@@ -230,6 +202,7 @@ class NetworkCommander(id: String,
       .withBootstrapServers(kafkaSettings.bootstrapServers.map(server => s"${server.host}:${server.port}").mkString(","))
       .withGroupId(networkId)
       .withProperty(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "true")
+      .withProperty(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest")
   }
 }
 

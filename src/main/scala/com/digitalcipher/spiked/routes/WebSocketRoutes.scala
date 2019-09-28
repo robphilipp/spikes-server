@@ -105,7 +105,7 @@ class WebSocketRoutes(webSocketPath: String,
             appLoggerName = "spikes-network-server",
             config = serverConfig,
             systemBaseName = networkCommanderId,
-            eventLogging = Seq(KafkaEventLogging())
+            eventLogging = Seq(KafkaEventLogging(topic = seriesNumber => s"$networkCommanderId-$seriesNumber"))
           )
 
           // you need to send a Build message to get the actor in a state

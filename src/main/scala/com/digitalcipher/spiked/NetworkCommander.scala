@@ -52,7 +52,7 @@ class NetworkCommander(id: String,
       // point we already need to start consuming the messages and sending them down the websocket
       // to the client UI.
       val consumer: (Consumer.Control, Future[Done]) = Consumer
-        .plainSource(consumerSettings(id, kafkaSettings), Subscriptions.topics("spikes-1"))
+        .plainSource(consumerSettings(id, kafkaSettings), Subscriptions.topics(s"$id-1"))
         //        .filter(record => record.key() == "fire")
 //        .toMat(Sink.foreach(record => self ! SendRecord(record)))(Keep.both)
         .toMat(Sink.foreach(record => {
@@ -123,6 +123,8 @@ class NetworkCommander(id: String,
             seriesRunner: SeriesRunner
            ): Receive = {
     case IncomingMessage(text) => text.parseJson.convertTo match {
+      case NetworkCommand("built") =>
+        log.info(s"(built) Network built and ready to start; id: $id")
 
       case NetworkCommand("start") =>
         log.info(s"(built) starting network; id: $id; kafka-settings: $kafkaSettings")
@@ -138,7 +140,8 @@ class NetworkCommander(id: String,
         log.info(s"(built) destroying network; id: $id")
         outgoingMessageActor ! PoisonPill
 
-      case NetworkCommand(command) => log.error(s"(built) Invalid network command; command: $command")
+      case NetworkCommand(command) =>
+        log.error(s"(built) Invalid network command; command: $command")
     }
 
     case _ => log.error(s"Invalid incoming message type")
@@ -201,8 +204,9 @@ class NetworkCommander(id: String,
     ConsumerSettings(kafkaConfig, new StringDeserializer, new StringDeserializer)
       .withBootstrapServers(kafkaSettings.bootstrapServers.map(server => s"${server.host}:${server.port}").mkString(","))
       .withGroupId(networkId)
-      .withProperty(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "true")
+//      .withProperty(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "true")
       .withProperty(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest")
+//      .withProperty(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "latest")
   }
 }
 

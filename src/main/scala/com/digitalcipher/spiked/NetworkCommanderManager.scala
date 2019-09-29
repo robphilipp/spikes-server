@@ -1,6 +1,7 @@
 package com.digitalcipher.spiked
 
-import akka.actor.{Actor, ActorLogging, ActorRef, PoisonPill, Terminated}
+import akka.actor.{Actor, ActorLogging, ActorRef, Terminated}
+import com.digitalcipher.spiked.NetworkCommander.DestroyNetwork
 import com.digitalcipher.spiked.NetworkCommanderManager.{AddNetworkCommander, AddedNetworkCommander, DeleteNetworkCommander, RetrieveNetworkCommanderById}
 
 /**
@@ -60,7 +61,8 @@ class NetworkCommanderManager extends Actor with ActorLogging {
     case DeleteNetworkCommander(id: String) =>
       // sends a poison pill to the network commander to stop it
       log.info(s"Sending poison pill to network commander; network ID: $id")
-      ids.get(id).foreach(networkCommander => networkCommander ! PoisonPill)
+      ids.get(id).foreach(networkCommander => networkCommander ! DestroyNetwork())
+//      ids.get(id).foreach(networkCommander => networkCommander ! PoisonPill)
 
       // returns the ID of the network commander that was deleted. we don't need to update the state
       // here because we are watching the network commander, and will receive a "Terminated" message

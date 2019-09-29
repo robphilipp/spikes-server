@@ -21,7 +21,7 @@ lazy val root = (project in file(".")).
 //      "ch.qos.logback" % "logback-classic" % "1.2.3",
 
       // kafka
-      "com.typesafe.akka" %% "akka-stream-kafka" % "1.0.4",
+      "com.typesafe.akka" %% "akka-stream-kafka" % "1.0.5",
 
       // core library for building spikes networks
       "com.digitalcipher.spiked" %% "spikes-core" % "0.0.23-snapshot",

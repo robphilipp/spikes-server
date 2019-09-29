@@ -43,14 +43,6 @@ class NetworkManagementRoutes(networkManagePath: String,
             .encodeToString(s"${Random.nextInt()}-${System.currentTimeMillis()}".getBytes)
             .replace("=", "")
 
-//          val seriesRunner = new SeriesRunner(
-//            timeFactor = 1,
-//            appLoggerName = "spikes-network-server",
-//            config = serverConfig,
-//            systemBaseName = id,
-//            eventLogging = Seq(KafkaEventLogging())
-//          )
-
           // creates the network commander actor
           val networkCommander = actorSystem.actorOf(NetworkCommander.props(
             name = id,
@@ -60,14 +52,9 @@ class NetworkManagementRoutes(networkManagePath: String,
             networkDescription = request.networkDescription
           ))
 
-//          val network: SeriesRunner.CreateNetworkResult = Await
-//            .result(networkCommander.ask(Build(seriesRunner)), timeout.duration)
-//            .asInstanceOf[SeriesRunner.CreateNetworkResult]
-
           // registers the network commander manager with the manager
           Await.result(networkCommanderManager.ask(AddNetworkCommander(id, networkCommander)), timeout.duration)
 
-          // todo once the UI sends the network description, then have to build the network, and use that
           // to return the size of the network
           complete(CreateNetworkCommanderResponse(id, request.networkDescription))
         }

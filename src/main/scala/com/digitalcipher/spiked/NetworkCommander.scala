@@ -1,6 +1,7 @@
 package com.digitalcipher.spiked
 
 import java.util.Properties
+import java.util.concurrent.TimeUnit
 
 import akka.Done
 import akka.actor.{Actor, ActorLogging, ActorRef, PoisonPill, Props}
@@ -161,7 +162,7 @@ class NetworkCommander(id: String,
       val kafkaAdminClient = AdminClient.create(asProperties(kafkaSettings))
       kafkaAdminClient.deleteTopics(topics)
       log.info(s"(built) deleted kafka topics; topics: $topics")
-      kafkaAdminClient.close()
+      kafkaAdminClient.close(5, TimeUnit.SECONDS)
 
       // suicide
       self ! PoisonPill

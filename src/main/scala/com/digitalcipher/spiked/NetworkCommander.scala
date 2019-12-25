@@ -9,17 +9,13 @@ import akka.kafka.scaladsl.Consumer
 import akka.kafka.{ConsumerSettings, Subscriptions}
 import akka.stream.ActorMaterializer
 import akka.stream.scaladsl.{Keep, Sink}
-import akka.util.Timeout
 import com.digitalcipher.spiked.NetworkCommander._
 import com.digitalcipher.spiked.apputils.SeriesRunner
-import com.digitalcipher.spiked.json.JsonSupport._
-import com.digitalcipher.spiked.logging.KafkaEventLogger.KafkaConfiguration
 import com.digitalcipher.spiked.routes.NetworkManagementRoutes.KafkaSettings
 import com.typesafe.config.Config
 import org.apache.kafka.clients.admin.{AdminClient, AdminClientConfig}
 import org.apache.kafka.clients.consumer.{ConsumerConfig, ConsumerRecord}
 import org.apache.kafka.common.serialization.StringDeserializer
-import spray.json._
 
 import scala.concurrent.{ExecutionContextExecutor, Future}
 
@@ -96,8 +92,8 @@ class NetworkCommander(id: String,
             consumerControl: Consumer.Control,
             seriesRunner: SeriesRunner
            ): Receive = {
-    case IncomingMessage(text) => text.parseJson.convertTo match {
-      case NetworkCommand(BUILD_COMMAND.name) =>
+    case IncomingMessage(text) => text.replaceAll("\"", "") match {
+      case BUILD_COMMAND.name =>
         log.info(s"(ready) building network commander; id: $id")
 
         // build the network
@@ -109,8 +105,23 @@ class NetworkCommander(id: String,
         log.info(s"(ready) network built and ready to run; id: $id; kafka-settings: $kafkaSettings")
         context.become(built(outgoingMessageActor, networkResults, consumerControl, seriesRunner))
 
-      case NetworkCommand(command) => log.error(s"(ready) Invalid network command; command: $command")
+      case command => log.error(s"(ready) Invalid network command; command: $command")
     }
+//    case IncomingMessage(text) => text.parseJson.convertTo match {
+//      case NetworkCommand(BUILD_COMMAND.name) =>
+//        log.info(s"(ready) building network commander; id: $id")
+//
+//        // build the network
+//        val networkResults = seriesRunner.createNetworks(num = 1, description = networkDescription, reparseReport = false)
+//        if (networkResults.hasFailures) {
+//          seriesRunner.logger.error(s"Failed to create all networks; failures: ${networkResults.failures.mkString}")
+//        }
+//
+//        log.info(s"(ready) network built and ready to run; id: $id; kafka-settings: $kafkaSettings")
+//        context.become(built(outgoingMessageActor, networkResults, consumerControl, seriesRunner))
+//
+//      case NetworkCommand(command) => log.error(s"(ready) Invalid network command; command: $command")
+//    }
   }
 
   /**
@@ -136,22 +147,39 @@ class NetworkCommander(id: String,
             consumerControl: Consumer.Control,
             seriesRunner: SeriesRunner
            ): Receive = {
-    case IncomingMessage(text) => text.parseJson.convertTo match {
-      case NetworkCommand(BUILD_COMMAND.name) =>
+    case IncomingMessage(text) => text.replaceAll("\"", "") match {
+      case BUILD_COMMAND.name =>
         log.info(s"(built) Network built and ready to start; id: $id")
 
-      case NetworkCommand(START_COMMAND.name) =>
+      case START_COMMAND.name =>
         log.info(s"(built) starting network; id: $id; kafka-settings: $kafkaSettings")
 
         // todo start the simulation
         //        seriesRunner.runSimulationSeries(networkResults, , )
+        seriesRunner.runSimulationSeries(networkResults, environmentFactory, inputNeuronSelector)
 
         // transition to the running state
         context.become(running(outgoingMessageActor, System.currentTimeMillis(), consumerControl, networkResults, seriesRunner))
 
-      case NetworkCommand(command) =>
+      case command =>
         log.error(s"(built) Invalid network command; command: $command")
     }
+//    case IncomingMessage(text) => text.parseJson.convertTo match {
+//      case NetworkCommand(BUILD_COMMAND.name) =>
+//        log.info(s"(built) Network built and ready to start; id: $id")
+//
+//      case NetworkCommand(START_COMMAND.name) =>
+//        log.info(s"(built) starting network; id: $id; kafka-settings: $kafkaSettings")
+//
+//        // todo start the simulation
+//        //        seriesRunner.runSimulationSeries(networkResults, , )
+//
+//        // transition to the running state
+//        context.become(running(outgoingMessageActor, System.currentTimeMillis(), consumerControl, networkResults, seriesRunner))
+//
+//      case NetworkCommand(command) =>
+//        log.error(s"(built) Invalid network command; command: $command")
+//    }
 
     case DestroyNetwork() =>
       log.info(s"(built) destroying network; id: $id")
@@ -191,16 +219,24 @@ class NetworkCommander(id: String,
       consumerControl.stop()
       context.become(built(outgoingMessageActor, networkResults, consumerControl, seriesRunner))
 
-    case IncomingMessage(text) =>
-      text.parseJson.convertTo match {
+    case IncomingMessage(text) => text.replaceAll("\"", "") match {
 
-        case NetworkCommand(STOP_COMMAND.name) =>
+        case STOP_COMMAND.name =>
           log.info(s"(running) stopping network; id: $id")
           consumerControl.stop()
           context.become(built(outgoingMessageActor, networkResults, consumerControl, seriesRunner))
 
-        case NetworkCommand(command) => log.error(s"(running) Invalid network command; command: $command")
+        case command => log.error(s"(running) Invalid network command; command: $command")
       }
+//    case IncomingMessage(text) => text.parseJson.convertTo match {
+//
+//        case NetworkCommand(STOP_COMMAND.name) =>
+//          log.info(s"(running) stopping network; id: $id")
+//          consumerControl.stop()
+//          context.become(built(outgoingMessageActor, networkResults, consumerControl, seriesRunner))
+//
+//        case NetworkCommand(command) => log.error(s"(running) Invalid network command; command: $command")
+//      }
 
     case message => log.error(s"(running) Invalid message type; message type: ${message.getClass.getName}")
   }

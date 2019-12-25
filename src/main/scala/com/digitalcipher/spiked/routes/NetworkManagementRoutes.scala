@@ -1,5 +1,7 @@
 package com.digitalcipher.spiked.routes
 
+import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
 import java.util.Base64
 
 import akka.actor.{ActorRef, ActorSystem}
@@ -38,10 +40,13 @@ class NetworkManagementRoutes(networkManagePath: String,
       post {
         entity(as[CreateNetworkCommander]) { request =>
           // create an ID for the network from a random number and the current time
-          val id = Base64
-            .getUrlEncoder
-            .encodeToString(s"${Random.nextInt()}-${System.currentTimeMillis()}".getBytes)
-            .replace("=", "")
+          val id = Base64.getUrlEncoder
+            .encodeToString(s"${Random.nextInt()}".getBytes)
+            .replace("=", "") + s"-${LocalDateTime.now.format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"))}"
+//          val id = Base64
+//            .getUrlEncoder
+//            .encodeToString(s"${Random.nextInt()}-${System.currentTimeMillis()}".getBytes)
+//            .replace("=", "")
 
           // creates the network commander actor
           val networkCommander = actorSystem.actorOf(NetworkCommander.props(

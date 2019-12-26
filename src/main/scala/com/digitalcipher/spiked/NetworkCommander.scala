@@ -11,13 +11,18 @@ import akka.stream.ActorMaterializer
 import akka.stream.scaladsl.{Keep, Sink}
 import com.digitalcipher.spiked.NetworkCommander._
 import com.digitalcipher.spiked.apputils.SeriesRunner
+import com.digitalcipher.spiked.inputs.PeriodicEnvironmentFactory
 import com.digitalcipher.spiked.routes.NetworkManagementRoutes.KafkaSettings
 import com.typesafe.config.Config
 import org.apache.kafka.clients.admin.{AdminClient, AdminClientConfig}
 import org.apache.kafka.clients.consumer.{ConsumerConfig, ConsumerRecord}
 import org.apache.kafka.common.serialization.StringDeserializer
+import squants.Time
+import squants.electro.{ElectricPotential, Millivolts}
+import squants.time.{Milliseconds, Seconds}
 
 import scala.concurrent.{ExecutionContextExecutor, Future}
+import scala.util.Random
 
 class NetworkCommander(id: String,
                        networkDescription: String,
@@ -154,9 +159,26 @@ class NetworkCommander(id: String,
       case START_COMMAND.name =>
         log.info(s"(built) starting network; id: $id; kafka-settings: $kafkaSettings")
 
-        // todo start the simulation
-        //        seriesRunner.runSimulationSeries(networkResults, , )
-        seriesRunner.runSimulationSeries(networkResults, environmentFactory, inputNeuronSelector)
+        // todo move code to create the environment factory outside of this function/class
+        //    so that it can be configured by the UI
+        // create the environment factory using the signal-function factory
+        val environmentFactory = PeriodicEnvironmentFactory(
+        initialDelay = Milliseconds(0),
+        signalPeriod = Milliseconds(50),
+        simulationDuration = Seconds(50),
+        signalsFunction = randomNeuronSignalGeneratorFunction(Milliseconds(25))
+      )
+
+        // todo the input selector needs to be passed in (configured from the UI)
+        // run the simulation, which will end after the time specified in the environment factory
+        seriesRunner.runSimulationSeries(
+          networkResults = networkResults.successes,
+          environmentFactory = environmentFactory,
+          inputNeuronSelector = """(in\-[1-7]$)""".r
+        )
+        // todo ---- end
+
+        log.info(s"(built) started simulation; id: $id")
 
         // transition to the running state
         context.become(running(outgoingMessageActor, System.currentTimeMillis(), consumerControl, networkResults, seriesRunner))
@@ -276,7 +298,7 @@ object NetworkCommander {
 
   case class SendRecord(record: ConsumerRecord[String, String])
 
-  def props(name: String, networkDescription: String, manager: ActorRef, kafkaConfig: Config, kafkaSettings: KafkaSettings) =
+  def props(name: String, networkDescription: String, manager: ActorRef, kafkaConfig: Config, kafkaSettings: KafkaSettings): Props =
     Props(new NetworkCommander(name, networkDescription, manager, kafkaConfig, kafkaSettings))
 
   /**
@@ -289,7 +311,10 @@ object NetworkCommander {
     import scala.collection.JavaConverters._
 
     val props = new Properties()
-    props.put(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, settings.bootstrapServers.map(server => s"${server.host}:${server.port}").asJava)
+    props.put(
+      AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG,
+      settings.bootstrapServers.map(server => s"${server.host}:${server.port}").asJava
+    )
     props
 //    import scala.collection.JavaConverters._
 //    val props = new Properties()
@@ -301,4 +326,35 @@ object NetworkCommander {
     import scala.collection.JavaConverters._
     List.range(1, numSeries + 1).map(i => s"$id-$i").asJava
   }
+
+  val random = new Random(System.currentTimeMillis())
+
+  /**
+    * Creates a function that accepts a sequence of neurons and a time. When the function is called, it sends
+    * a signal to one of the neurons in the set, picked at random, if the elapsed time since the last call
+    * exceeds the `minSignalInterval` time. For example, suppose that there are 10 input neurons
+    * (n,,1,,, n,,2,,, ...., n,,10,,), and the min signal time is 25 ms. If the environment has a period of 50 ms,
+    * then every 50 ms it will call the function returned from this method, handing it a sequence holding the
+    * input neurons, n,,i,,. This function checks if it has been called within the last 25 ms, and if not,
+    * picks one neuron from the sequence at random, resets the time, and returns a map holding the actor
+    * reference to the input neuron with the associate signal strength (in mV).
+    *
+    * @param minSignalInterval The smallest elapsed time from the previous call that a signal will be sent
+    * @return A function that accepts a sequence of input neurons and a time and retuens a map of neurons that are
+    *         to receive a signal and the strength of that signal
+    */
+  private def randomNeuronSignalGeneratorFunction(minSignalInterval: Time): (Seq[ActorRef], Time) => Map[ActorRef, ElectricPotential] = {
+    var index: Int = 0
+    var startTime: Time = Milliseconds(0)
+
+    (neurons, time) => {
+      if (time - startTime > minSignalInterval) {
+        index = random.nextInt(neurons.length)
+        startTime = time
+      }
+      Map(neurons(index) -> Millivolts(1.05))
+      //      Map(neurons(random.nextInt(neurons.length)) -> Millivolts(1.05))
+    }
+  }
+
 }

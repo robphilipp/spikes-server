@@ -57,23 +57,21 @@ class NetworkCommander(id: String,
     case BuildNetwork(outgoingMessageActor, seriesRunner) =>
       // as the network is being built, it will publish messages describing the network. so at this
       // point we already need to start consuming the messages and sending them down the websocket
-      // to the client UI.
-      val consumer: (Consumer.Control, Future[Done]) = Consumer
+      // to the client UI. Note that this consumer will read all the messages from kafka and forward
+      // them to the web-socket. This is just a forwarder of the messages that the network builder
+      // and series runner (which could be on different nodes) send to kafka
+      val (consumerControl, future): (Consumer.Control, Future[Done]) = Consumer
         .plainSource(consumerSettings(id, kafkaSettings), Subscriptions.topics(s"$id-1"))
-        //        .filter(record => record.key() == "fire")
-        .toMat(Sink.foreach(record => {
-          log.info(s"sending record: ${record.value().toString}")
-          outgoingMessageActor ! OutgoingMessage(record.value().toString)
-        }))(Keep.both)
+        .toMat(Sink.foreach(record => outgoingMessageActor ! OutgoingMessage(record.value())))(Keep.both)
         .run()
 
       // set up a handler for when the simulation is completed and has stopped
-      consumer._2.onComplete(_ => self ! SimulationStopped())
+      future.onComplete(_ => self ! SimulationStopped())
 
       // todo deal with the error condition properly
 
       // transition to the state where the network is built, but not yet running
-      context.become(ready(outgoingMessageActor /*, networkResults*/ , consumer._1, seriesRunner))
+      context.become(ready(outgoingMessageActor, consumerControl, seriesRunner))
   }
 
   /**
@@ -112,21 +110,21 @@ class NetworkCommander(id: String,
 
       case command => log.error(s"(ready) Invalid network command; command: $command")
     }
-//    case IncomingMessage(text) => text.parseJson.convertTo match {
-//      case NetworkCommand(BUILD_COMMAND.name) =>
-//        log.info(s"(ready) building network commander; id: $id")
-//
-//        // build the network
-//        val networkResults = seriesRunner.createNetworks(num = 1, description = networkDescription, reparseReport = false)
-//        if (networkResults.hasFailures) {
-//          seriesRunner.logger.error(s"Failed to create all networks; failures: ${networkResults.failures.mkString}")
-//        }
-//
-//        log.info(s"(ready) network built and ready to run; id: $id; kafka-settings: $kafkaSettings")
-//        context.become(built(outgoingMessageActor, networkResults, consumerControl, seriesRunner))
-//
-//      case NetworkCommand(command) => log.error(s"(ready) Invalid network command; command: $command")
-//    }
+    //    case IncomingMessage(text) => text.parseJson.convertTo match {
+    //      case NetworkCommand(BUILD_COMMAND.name) =>
+    //        log.info(s"(ready) building network commander; id: $id")
+    //
+    //        // build the network
+    //        val networkResults = seriesRunner.createNetworks(num = 1, description = networkDescription, reparseReport = false)
+    //        if (networkResults.hasFailures) {
+    //          seriesRunner.logger.error(s"Failed to create all networks; failures: ${networkResults.failures.mkString}")
+    //        }
+    //
+    //        log.info(s"(ready) network built and ready to run; id: $id; kafka-settings: $kafkaSettings")
+    //        context.become(built(outgoingMessageActor, networkResults, consumerControl, seriesRunner))
+    //
+    //      case NetworkCommand(command) => log.error(s"(ready) Invalid network command; command: $command")
+    //    }
   }
 
   /**
@@ -156,6 +154,9 @@ class NetworkCommander(id: String,
       case BUILD_COMMAND.name =>
         log.info(s"(built) Network built and ready to start; id: $id")
 
+      // todo add a case statement for adding/removing sensors (in the "running" state, messages
+      //    from the sensors will be processed. calls the series runner to add a sensor
+
       case START_COMMAND.name =>
         log.info(s"(built) starting network; id: $id; kafka-settings: $kafkaSettings")
 
@@ -163,11 +164,11 @@ class NetworkCommander(id: String,
         //    so that it can be configured by the UI
         // create the environment factory using the signal-function factory
         val environmentFactory = PeriodicEnvironmentFactory(
-        initialDelay = Milliseconds(0),
-        signalPeriod = Milliseconds(50),
-        simulationDuration = Seconds(50),
-        signalsFunction = randomNeuronSignalGeneratorFunction(Milliseconds(25))
-      )
+          initialDelay = Milliseconds(0),
+          signalPeriod = Milliseconds(50),
+          simulationDuration = Seconds(50),
+          signalsFunction = randomNeuronSignalGeneratorFunction(Milliseconds(25))
+        )
 
         // todo the input selector needs to be passed in (configured from the UI)
         // run the simulation, which will end after the time specified in the environment factory
@@ -186,22 +187,22 @@ class NetworkCommander(id: String,
       case command =>
         log.error(s"(built) Invalid network command; command: $command")
     }
-//    case IncomingMessage(text) => text.parseJson.convertTo match {
-//      case NetworkCommand(BUILD_COMMAND.name) =>
-//        log.info(s"(built) Network built and ready to start; id: $id")
-//
-//      case NetworkCommand(START_COMMAND.name) =>
-//        log.info(s"(built) starting network; id: $id; kafka-settings: $kafkaSettings")
-//
-//        // todo start the simulation
-//        //        seriesRunner.runSimulationSeries(networkResults, , )
-//
-//        // transition to the running state
-//        context.become(running(outgoingMessageActor, System.currentTimeMillis(), consumerControl, networkResults, seriesRunner))
-//
-//      case NetworkCommand(command) =>
-//        log.error(s"(built) Invalid network command; command: $command")
-//    }
+    //    case IncomingMessage(text) => text.parseJson.convertTo match {
+    //      case NetworkCommand(BUILD_COMMAND.name) =>
+    //        log.info(s"(built) Network built and ready to start; id: $id")
+    //
+    //      case NetworkCommand(START_COMMAND.name) =>
+    //        log.info(s"(built) starting network; id: $id; kafka-settings: $kafkaSettings")
+    //
+    //        // todo start the simulation
+    //        //        seriesRunner.runSimulationSeries(networkResults, , )
+    //
+    //        // transition to the running state
+    //        context.become(running(outgoingMessageActor, System.currentTimeMillis(), consumerControl, networkResults, seriesRunner))
+    //
+    //      case NetworkCommand(command) =>
+    //        log.error(s"(built) Invalid network command; command: $command")
+    //    }
 
     case DestroyNetwork() =>
       log.info(s"(built) destroying network; id: $id")
@@ -243,22 +244,25 @@ class NetworkCommander(id: String,
 
     case IncomingMessage(text) => text.replaceAll("\"", "") match {
 
-        case STOP_COMMAND.name =>
-          log.info(s"(running) stopping network; id: $id")
-          consumerControl.stop()
-          context.become(built(outgoingMessageActor, networkResults, consumerControl, seriesRunner))
+      // todo add a case statement for incoming signals which calls the series-runner to send
+      //    a message to all the neurons in the incoming signals message
 
-        case command => log.error(s"(running) Invalid network command; command: $command")
-      }
-//    case IncomingMessage(text) => text.parseJson.convertTo match {
-//
-//        case NetworkCommand(STOP_COMMAND.name) =>
-//          log.info(s"(running) stopping network; id: $id")
-//          consumerControl.stop()
-//          context.become(built(outgoingMessageActor, networkResults, consumerControl, seriesRunner))
-//
-//        case NetworkCommand(command) => log.error(s"(running) Invalid network command; command: $command")
-//      }
+      case STOP_COMMAND.name =>
+        log.info(s"(running) stopping network; id: $id")
+        consumerControl.stop()
+        context.become(built(outgoingMessageActor, networkResults, consumerControl, seriesRunner))
+
+      case command => log.error(s"(running) Invalid network command; command: $command")
+    }
+    //    case IncomingMessage(text) => text.parseJson.convertTo match {
+    //
+    //        case NetworkCommand(STOP_COMMAND.name) =>
+    //          log.info(s"(running) stopping network; id: $id")
+    //          consumerControl.stop()
+    //          context.become(built(outgoingMessageActor, networkResults, consumerControl, seriesRunner))
+    //
+    //        case NetworkCommand(command) => log.error(s"(running) Invalid network command; command: $command")
+    //      }
 
     case message => log.error(s"(running) Invalid message type; message type: ${message.getClass.getName}")
   }
@@ -282,6 +286,7 @@ object NetworkCommander {
   sealed trait NetworkMessage
 
   case class BuildNetwork(actor: ActorRef, seriesRunner: SeriesRunner)
+
   case class DestroyNetwork()
 
   case class Link(actor: ActorRef)
@@ -316,10 +321,10 @@ object NetworkCommander {
       settings.bootstrapServers.map(server => s"${server.host}:${server.port}").asJava
     )
     props
-//    import scala.collection.JavaConverters._
-//    val props = new Properties()
-//    config.entrySet().asScala.foreach(entry => props.put(entry.getKey, entry.getValue.unwrapped()))
-//    props
+    //    import scala.collection.JavaConverters._
+    //    val props = new Properties()
+    //    config.entrySet().asScala.foreach(entry => props.put(entry.getKey, entry.getValue.unwrapped()))
+    //    props
   }
 
   def topicsToDelete(numSeries: Int, id: String): java.util.Collection[String] = {
@@ -340,7 +345,7 @@ object NetworkCommander {
     * reference to the input neuron with the associate signal strength (in mV).
     *
     * @param minSignalInterval The smallest elapsed time from the previous call that a signal will be sent
-    * @return A function that accepts a sequence of input neurons and a time and retuens a map of neurons that are
+    * @return A function that accepts a sequence of input neurons and a time and returns a map of neurons that are
     *         to receive a signal and the strength of that signal
     */
   private def randomNeuronSignalGeneratorFunction(minSignalInterval: Time): (Seq[ActorRef], Time) => Map[ActorRef, ElectricPotential] = {

@@ -5,7 +5,7 @@ lazy val root = (project in file(".")).
   settings(
     inThisBuild(List(
       organization := "com.example",
-      scalaVersion := "2.12.8"
+      scalaVersion := "2.12.9"
     )),
     name := "spikes-server",
     libraryDependencies ++= Seq(
@@ -24,7 +24,7 @@ lazy val root = (project in file(".")).
       "com.typesafe.akka" %% "akka-stream-kafka" % "1.0.5",
 
       // core library for building spikes networks
-      "com.digitalcipher.spiked" %% "spikes-core" % "0.0.23-snapshot",
+      "com.digitalcipher.spiked" %% "spikes-core" % "0.0.24-snapshot",
 
       // json serialization/deserialization
       "io.spray" %% "spray-json" % "1.3.5",

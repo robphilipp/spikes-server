@@ -1,9 +1,9 @@
 package com.digitalcipher.spiked
 
-import java.nio.file.{Path, Paths}
+import java.nio.file.{ Path, Paths }
 import java.util.concurrent.TimeUnit
 
-import akka.actor.{ActorRef, ActorSystem, Props}
+import akka.actor.{ ActorRef, ActorSystem, Props }
 import akka.event.Logging
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.server.Directives._
@@ -11,22 +11,22 @@ import akka.http.scaladsl.server.Route
 import akka.stream.ActorMaterializer
 import akka.util.Timeout
 import com.digitalcipher.spiked.apputils.SpikesAppUtils.loadConfigFrom
-import com.digitalcipher.spiked.apputils.{SeriesRunner, SpikesAppUtils}
-import com.digitalcipher.spiked.routes.{NetworkManagementRoutes, StaticContentRoutes, WebSocketRoutes}
+import com.digitalcipher.spiked.apputils.{ SeriesRunner, SpikesAppUtils }
+import com.digitalcipher.spiked.routes.{ NetworkManagementRoutes, StaticContentRoutes, WebSocketRoutes }
 import com.typesafe.config.ConfigFactory
 
 import scala.collection.JavaConverters._
-import scala.concurrent.duration.{Duration, _}
-import scala.concurrent.{Await, ExecutionContext, Future}
-import scala.util.{Failure, Success}
+import scala.concurrent.duration.{ Duration, _ }
+import scala.concurrent.{ Await, ExecutionContext, Future }
+import scala.util.{ Failure, Success }
 
 /**
-  * Server for static content and web sockets. Serves up the web page and
-  * then streams data to the real-time visualizations.
-  */
+ * Server for static content and web sockets. Serves up the web page and
+ * then streams data to the real-time visualizations.
+ */
 object SpikedServer extends App {
   // load the configuration
-//  private val config = ConfigFactory.parseResources("application.conf")
+  //  private val config = ConfigFactory.parseResources("application.conf")
   private val config = loadConfigFrom("application.com")
   private val hostname = config.getString("http.ip")
   private val port = config.getInt("http.port")
@@ -60,9 +60,9 @@ object SpikedServer extends App {
   Await.result(actorSystem.whenTerminated, Duration.Inf)
 
   /**
-    * Constructs the HTTP routes for static content based on application configuration
-    * @return The HTTP route for the static contents
-    */
+   * Constructs the HTTP routes for static content based on application configuration
+   * @return The HTTP route for the static contents
+   */
   private def staticContentRoutes: Route = {
     val baseUrl: String = Option(config.getString("http.baseUrl")).getOrElse("")
     val defaultPages: Seq[Path] = Option(config.getStringList("http.defaultPages"))
@@ -75,8 +75,7 @@ object SpikedServer extends App {
     log.info(s"static-content route settings; " +
       s"base URL: $baseUrl; " +
       s"default pages: $defaultPages; " +
-      s"timeout: ${timeout.duration.toSeconds} s"
-    )
+      s"timeout: ${timeout.duration.toSeconds} s")
 
     StaticContentRoutes(baseUrl, defaultPages, timeout).staticContentRoutes
   }
@@ -88,6 +87,6 @@ object SpikedServer extends App {
   }
 
   private def networkManagementRoutes: Route = {
-    NetworkManagementRoutes("network-management", networkManager, actorSystem/*, config*/, kafkaConsumerConfig).networkManagementRoutes
+    NetworkManagementRoutes("network-management", networkManager, actorSystem /*, config*/ , kafkaConsumerConfig).networkManagementRoutes
   }
 }

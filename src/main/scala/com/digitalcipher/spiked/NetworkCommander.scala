@@ -4,25 +4,25 @@ import java.util.Properties
 import java.util.concurrent.TimeUnit
 
 import akka.Done
-import akka.actor.{Actor, ActorLogging, ActorRef, PoisonPill, Props}
+import akka.actor.{ Actor, ActorLogging, ActorRef, PoisonPill, Props }
 import akka.kafka.scaladsl.Consumer
-import akka.kafka.{ConsumerSettings, Subscriptions}
+import akka.kafka.{ ConsumerSettings, Subscriptions }
 import akka.stream.ActorMaterializer
-import akka.stream.scaladsl.{Keep, Sink}
+import akka.stream.scaladsl.{ Keep, Sink }
 import com.digitalcipher.spiked.NetworkCommander._
 import com.digitalcipher.spiked.apputils.SeriesRunner
 import com.digitalcipher.spiked.inputs.PeriodicEnvironmentFactory
 import com.digitalcipher.spiked.neurons.Signal
 import com.digitalcipher.spiked.routes.NetworkManagementRoutes.KafkaSettings
 import com.typesafe.config.Config
-import org.apache.kafka.clients.admin.{AdminClient, AdminClientConfig}
-import org.apache.kafka.clients.consumer.{ConsumerConfig, ConsumerRecord}
+import org.apache.kafka.clients.admin.{ AdminClient, AdminClientConfig }
+import org.apache.kafka.clients.consumer.{ ConsumerConfig, ConsumerRecord }
 import org.apache.kafka.common.serialization.StringDeserializer
 import squants.Time
-import squants.electro.{ElectricPotential, Millivolts}
-import squants.time.{Milliseconds, Seconds}
+import squants.electro.{ ElectricPotential, Millivolts }
+import squants.time.{ Milliseconds, Seconds }
 
-import scala.concurrent.{ExecutionContextExecutor, Future}
+import scala.concurrent.{ ExecutionContextExecutor, Future }
 import scala.util.Random
 import scala.util.matching.Regex
 
@@ -160,27 +160,31 @@ class NetworkCommander(
       case START_COMMAND.name =>
         log.info(s"(built) starting network; id: $id; kafka-settings: $kafkaSettings")
 
-        // todo move code to create the environment factory outside of this function/class
-        //    so that it can be configured by the UI
-        // create the environment factory using the signal-function factory
-        val environmentFactory = PeriodicEnvironmentFactory(
-          initialDelay = Milliseconds(0),
-          signalPeriod = Milliseconds(50),
-          simulationDuration = Seconds(50),
-          signalsFunction = randomNeuronSignalGeneratorFunction(Milliseconds(25)))
+        if (seriesRunner.hasSensors(networkResults.successes.map(result => result.system.name))) {
+          // todo move code to create the environment factory outside of this function/class
+          //    so that it can be configured by the UI
+          // create the environment factory using the signal-function factory
+          val environmentFactory = PeriodicEnvironmentFactory(
+            initialDelay = Milliseconds(0),
+            signalPeriod = Milliseconds(50),
+            simulationDuration = Seconds(50),
+            signalsFunction = randomNeuronSignalGeneratorFunction(Milliseconds(25)))
 
-        // todo the input selector needs to be passed in (configured from the UI)
-        // run the simulation, which will end after the time specified in the environment factory
-        seriesRunner.runSimulationSeries(
-          networkResults = networkResults.successes,
-          environmentFactory = environmentFactory,
-          inputNeuronSelector = """(in\-[1-7]$)""".r)
-        // todo ---- end
+          // todo the input selector needs to be passed in (configured from the UI)
+          // run the simulation, which will end after the time specified in the environment factory
+          seriesRunner.runSimulationSeries(
+            networkResults = networkResults.successes,
+            environmentFactory = environmentFactory,
+            inputNeuronSelector = """(in\-[1-7]$)""".r)
+          // todo ---- end
 
-        log.info(s"(built) started simulation; id: $id")
+          log.info(s"(built) started simulation; id: $id")
 
-        // transition to the running state
-        context.become(running(outgoingMessageActor, System.currentTimeMillis(), consumerControl, networkResults, seriesRunner))
+          // transition to the running state
+          context.become(running(outgoingMessageActor, System.currentTimeMillis(), consumerControl, networkResults, seriesRunner))
+        } else {
+          log.error(s"(built) cannot start simulation because no sensors have been created")
+        }
 
       case command =>
         log.error(s"(built) Invalid network command; command: $command")
@@ -208,7 +212,7 @@ class NetworkCommander(
       // todo send back the list of input neurons that were selected
       seriesRunner
         .addSensor(name, selector, networkResults.successes)
-//        .andThen(tried => tried.foreach(results => results.map(result => result.neuronIds)))
+    //        .andThen(tried => tried.foreach(results => results.map(result => result.neuronIds)))
 
     case DestroyNetwork() =>
       log.info(s"(built) destroying network; id: $id")

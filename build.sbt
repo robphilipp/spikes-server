@@ -9,6 +9,9 @@ lazy val root = (project in file(".")).
     )),
     name := "spikes-server",
     libraryDependencies ++= Seq(
+      // config
+      "com.typesafe" % "config" % "1.4.0",
+
       // akka dependencies
       "com.typesafe.akka" %% "akka-http" % akkaHttpVersion,
       "com.typesafe.akka" %% "akka-http-spray-json" % akkaHttpVersion,

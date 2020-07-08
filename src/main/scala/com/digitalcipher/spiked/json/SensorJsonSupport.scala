@@ -1,7 +1,7 @@
 package com.digitalcipher.spiked.json
 
 import akka.http.scaladsl.marshallers.sprayjson.SprayJsonSupport
-import com.digitalcipher.spiked.NetworkCommander.{AddSensorMessage, IncomingSignal}
+import com.digitalcipher.spiked.NetworkCommander.{ AddSensorMessage, IncomingSignal }
 import spray.json.DefaultJsonProtocol
 import squants.electro.ElectricPotential
 
@@ -27,15 +27,13 @@ class SensorJsonSupport extends DefaultJsonProtocol {
   implicit object AddSensorMessageFormat extends RootJsonFormat[AddSensorMessage] {
     def write(message: AddSensorMessage): JsObject = JsObject(
       "name" -> JsString(message.name),
-      "selector" -> JsString(message.selector.regex)
-    )
+      "selector" -> JsString(message.selector.regex))
 
     def read(message: JsValue): AddSensorMessage = {
       message.asJsObject.getFields("name", "selector") match {
         case Seq(JsString(sensorName), JsString(selector)) => AddSensorMessage(
           name = sensorName,
-          selector = selector.r
-        )
+          selector = selector.r)
         case _ => deserializationError("AddSensorMessage expected")
       }
     }
@@ -47,16 +45,14 @@ class SensorJsonSupport extends DefaultJsonProtocol {
     def write(message: IncomingSignal): JsObject = JsObject(
       "sensorName" -> JsString(message.sensorName),
       "neuronIds" -> JsArray(message.neuronIds.map(id => JsString(id)).toVector),
-      "signal" -> message.signal.toJson
-    )
+      "signal" -> message.signal.toJson)
 
     def read(message: JsValue): IncomingSignal = {
       message.asJsObject.getFields("name", "selector") match {
         case Seq(JsString(sensorName), JsArray(neuronIds), signal) => IncomingSignal(
           sensorName = sensorName,
           neuronIds = neuronIds.map(id => id.convertTo[String]),
-          signal = signal.convertTo[ElectricPotential]
-        )
+          signal = signal.convertTo[ElectricPotential])
         case _ => deserializationError("AddSensorMessage expected")
       }
     }

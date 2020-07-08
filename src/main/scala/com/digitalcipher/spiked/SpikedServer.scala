@@ -26,8 +26,7 @@ import scala.util.{ Failure, Success }
  */
 object SpikedServer extends App {
   // load the configuration
-  //  private val config = ConfigFactory.parseResources("application.conf")
-  private val config = loadConfigFrom("application.com")
+  private val config = loadConfigFrom("application.conf")
   private val hostname = config.getString("http.ip")
   private val port = config.getInt("http.port")
   private val kafkaConsumerConfig = config.getConfig("akka.kafka.consumer")

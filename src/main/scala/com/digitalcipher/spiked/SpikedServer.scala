@@ -10,6 +10,8 @@ import akka.http.scaladsl.server.Directives._
 import akka.http.scaladsl.server.Route
 import akka.stream.ActorMaterializer
 import akka.util.Timeout
+import com.digitalcipher.spiked.apputils.SpikesAppUtils.loadConfigFrom
+import com.digitalcipher.spiked.apputils.{SeriesRunner, SpikesAppUtils}
 import com.digitalcipher.spiked.routes.{NetworkManagementRoutes, StaticContentRoutes, WebSocketRoutes}
 import com.typesafe.config.ConfigFactory
 
@@ -24,10 +26,11 @@ import scala.util.{Failure, Success}
   */
 object SpikedServer extends App {
   // load the configuration
-  private val config = ConfigFactory.parseResources("application.conf")
+//  private val config = ConfigFactory.parseResources("application.conf")
+  private val config = loadConfigFrom("application.com")
   private val hostname = config.getString("http.ip")
   private val port = config.getInt("http.port")
-  private val kafkaConfig = config.getConfig("akka.kafka.consumer")
+  private val kafkaConsumerConfig = config.getConfig("akka.kafka.consumer")
 
   // set up ActorSystem and other dependencies here
   implicit val actorSystem: ActorSystem = ActorSystem("spiked-network-server")
@@ -81,10 +84,10 @@ object SpikedServer extends App {
   private def webSocketRoutes: Route = {
     val webSocketPath: String = Option(config.getString("http.webSocketPath")).getOrElse("")
     log.info(s"web-socket route settings; web-socket path: $webSocketPath")
-    WebSocketRoutes(webSocketPath, networkManager, actorSystem).webSocketRoutes
+    WebSocketRoutes(webSocketPath, config, networkManager, actorSystem).webSocketRoutes
   }
 
   private def networkManagementRoutes: Route = {
-    NetworkManagementRoutes("network-management", networkManager, actorSystem, kafkaConfig).networkManagementRoutes
+    NetworkManagementRoutes("network-management", networkManager, actorSystem/*, config*/, kafkaConsumerConfig).networkManagementRoutes
   }
 }

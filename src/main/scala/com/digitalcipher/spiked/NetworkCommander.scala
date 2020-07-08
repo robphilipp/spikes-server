@@ -1,24 +1,31 @@
 package com.digitalcipher.spiked
 
+import java.util.Properties
+import java.util.concurrent.TimeUnit
+
 import akka.Done
-import akka.actor.{Actor, ActorLogging, ActorRef, Cancellable, PoisonPill, Props}
+import akka.actor.{Actor, ActorLogging, ActorRef, PoisonPill, Props}
 import akka.kafka.scaladsl.Consumer
 import akka.kafka.{ConsumerSettings, Subscriptions}
 import akka.stream.ActorMaterializer
 import akka.stream.scaladsl.{Keep, Sink}
-import akka.util.Timeout
 import com.digitalcipher.spiked.NetworkCommander._
-import com.digitalcipher.spiked.json.JsonSupport._
+import com.digitalcipher.spiked.apputils.SeriesRunner
+import com.digitalcipher.spiked.inputs.PeriodicEnvironmentFactory
 import com.digitalcipher.spiked.routes.NetworkManagementRoutes.KafkaSettings
 import com.typesafe.config.Config
+import org.apache.kafka.clients.admin.{AdminClient, AdminClientConfig}
 import org.apache.kafka.clients.consumer.{ConsumerConfig, ConsumerRecord}
 import org.apache.kafka.common.serialization.StringDeserializer
-import spray.json._
+import squants.Time
+import squants.electro.{ElectricPotential, Millivolts}
+import squants.time.{Milliseconds, Seconds}
 
 import scala.concurrent.{ExecutionContextExecutor, Future}
 import scala.util.Random
 
 class NetworkCommander(id: String,
+                       networkDescription: String,
                        manager: ActorRef,
                        kafkaConfig: Config,
                        kafkaSettings: KafkaSettings
@@ -27,16 +34,17 @@ class NetworkCommander(id: String,
   implicit val executionContext: ExecutionContextExecutor = context.dispatcher
   implicit val materializer: ActorMaterializer = ActorMaterializer.create(context)
 
-  import scala.concurrent.duration._
-
-  implicit val timeout: Timeout = Timeout(1.seconds)
-
+  /**
+    * Sets the receive function to the uninitialized function.
+    *
+    * @return a receive instance
+    */
   override def receive: Receive = uninitialized
 
   /**
-    * The initial state of the network actor. Once a connection is opened, transitions to
-    * the `waiting(...)` method, which is handed the web-socket actor that serves as the sink
-    * to this source
+    * The initial state of the network commander actor. When it receives a command to build the
+    * network, it creates the kafka consumer stream, sets up the consumer controller, and
+    * transitions to the `ready` state.
     *
     * @return a receive instance
     */
@@ -46,58 +54,170 @@ class NetworkCommander(id: String,
     // the handler returns a flow. The flow is a sink-to-source flow where the sink and source
     // are decoupled, except through this actor. This source sends messages to the web-socket
     // sink, which sends them back to the UI client.
-    case Build(outgoingMessageActor) =>
-      log.info(s"building network commander; id: $id")
-      // todo 1. build the actual spiked network
-      //      2. connect to kafka
-      //      3. stream topology messages to the outgoing message actor
+    case BuildNetwork(outgoingMessageActor, seriesRunner) =>
+      // as the network is being built, it will publish messages describing the network. so at this
+      // point we already need to start consuming the messages and sending them down the websocket
+      // to the client UI. Note that this consumer will read all the messages from kafka and forward
+      // them to the web-socket. This is just a forwarder of the messages that the network builder
+      // and series runner (which could be on different nodes) send to kafka
+      val (consumerControl, future): (Consumer.Control, Future[Done]) = Consumer
+        .plainSource(consumerSettings(id, kafkaSettings), Subscriptions.topics(s"$id-1"))
+        .toMat(Sink.foreach(record => outgoingMessageActor ! OutgoingMessage(record.value())))(Keep.both)
+        .run()
+
+      // set up a handler for when the simulation is completed and has stopped
+      future.onComplete(_ => self ! SimulationStopped())
+
+      // todo deal with the error condition properly
 
       // transition to the state where the network is built, but not yet running
-      context.become(built(outgoingMessageActor))
+      context.become(ready(outgoingMessageActor, consumerControl, seriesRunner))
   }
 
   /**
-    * State where the network is waiting to be started. At this point the network is already built.
+    * The function for the networks `ready` state. In this state, the kafka consumer stream is set up
+    * to receive messages from the network and forward them to the out-going (websocket) actor. When the
+    * network commander receives the `build` command, it builds the network and then transitions to
+    * the `built` state.
     *
-    * When a "start" message is received on the web-socket from the UI client:
-    * 1. the network is started,
-    * 2. creates an akka stream that subscribes to kafka and sends each message from kafka to itself
-    * once in the "running" state,
-    * 3. creates a handler to send a message to itself in the running state when the simulation has
-    * stopped or completed,
-    * 4. and then, finally, switches to the running state.
-    *
-    * If, on the other hand, this actor receives a "destroy" command, then destroys the network.
+    * Recall that during the build process, the network will emit messages to the logger (kafka in this
+    * case) that describe the networks topology, connections, and learning functions. These messages
+    * are sent to the out-going (websocket) actor.
     *
     * @param outgoingMessageActor The web-socket actor passed from the uninitialized state.
+    * @param consumerControl      The consumer control that allows the simulation to be stopped and
+    *                             when the simulation is complete, dispatches message that the simulation
+    *                             has stopped
+    * @param seriesRunner         The spikes network runner that runs the simulation
+    * @return A receive instance
+    */
+  def ready(outgoingMessageActor: ActorRef,
+            consumerControl: Consumer.Control,
+            seriesRunner: SeriesRunner
+           ): Receive = {
+    case IncomingMessage(text) => text.replaceAll("\"", "") match {
+      case BUILD_COMMAND.name =>
+        log.info(s"(ready) building network commander; id: $id")
+
+        // build the network
+        val networkResults = seriesRunner.createNetworks(num = 1, description = networkDescription, reparseReport = false)
+        if (networkResults.hasFailures) {
+          seriesRunner.logger.error(s"Failed to create all networks; failures: ${networkResults.failures.mkString}")
+        }
+
+        log.info(s"(ready) network built and ready to run; id: $id; kafka-settings: $kafkaSettings")
+        context.become(built(outgoingMessageActor, networkResults, consumerControl, seriesRunner))
+
+      case command => log.error(s"(ready) Invalid network command; command: $command")
+    }
+    //    case IncomingMessage(text) => text.parseJson.convertTo match {
+    //      case NetworkCommand(BUILD_COMMAND.name) =>
+    //        log.info(s"(ready) building network commander; id: $id")
+    //
+    //        // build the network
+    //        val networkResults = seriesRunner.createNetworks(num = 1, description = networkDescription, reparseReport = false)
+    //        if (networkResults.hasFailures) {
+    //          seriesRunner.logger.error(s"Failed to create all networks; failures: ${networkResults.failures.mkString}")
+    //        }
+    //
+    //        log.info(s"(ready) network built and ready to run; id: $id; kafka-settings: $kafkaSettings")
+    //        context.become(built(outgoingMessageActor, networkResults, consumerControl, seriesRunner))
+    //
+    //      case NetworkCommand(command) => log.error(s"(ready) Invalid network command; command: $command")
+    //    }
+  }
+
+  /**
+    * This function describes the `built` state. In this state the network has been built and is ready
+    * to start running and accepting inputs from its environment. In this state, the network commander
+    * accepts three commands: `build`, `start`, and `destroy`.
+    *
+    * ===Commands===
+    * 1.  `build` -- transition propagates the message, just log the transition
+    * 2.  `start` -- starts the network simulation and transitions to the `running` state
+    * 3.  `destroy` -- destroys the network, deletes up the topic and transitions to the `unitialized` state
+    *
+    * @param outgoingMessageActor The web-socket actor passed from the ready state.
+    * @param networkResults       The results of building the network
+    * @param consumerControl      The consumer control that allows the simulation to be stopped and
+    *                             when the simulation is complete, dispatches message that the simulation
+    *                             has stopped
+    * @param seriesRunner         The spikes network runner that runs the simulation
     * @return a receive instance
     */
-  def built(outgoingMessageActor: ActorRef): Receive = {
-    case IncomingMessage(text) => text.parseJson.convertTo match {
-      case NetworkCommand("start") =>
-        log.info(s"starting network; id: $id; kafka-settings: $kafkaSettings")
+  def built(outgoingMessageActor: ActorRef,
+            networkResults: SeriesRunner.CreateNetworkResults,
+            consumerControl: Consumer.Control,
+            seriesRunner: SeriesRunner
+           ): Receive = {
+    case IncomingMessage(text) => text.replaceAll("\"", "") match {
+      case BUILD_COMMAND.name =>
+        log.info(s"(built) Network built and ready to start; id: $id")
 
-        // todo send a message to the network to start the simulation
+      // todo add a case statement for adding/removing sensors (in the "running" state, messages
+      //    from the sensors will be processed. calls the series runner to add a sensor
 
-        // todo the topic has to be dynamic; spikes-1 is just for testing, keys are just for testing
-        val consumer: (Consumer.Control, Future[Done]) = Consumer
-          .plainSource(consumerSettings(id, kafkaSettings), Subscriptions.topics("spikes-1"))
-          .filter(record => record.key() == "fire")
-          .toMat(Sink.foreach(record => self ! SendRecord(record)))(Keep.both)
-          .run()
+      case START_COMMAND.name =>
+        log.info(s"(built) starting network; id: $id; kafka-settings: $kafkaSettings")
 
-        // set up a handler for when the simulation is completed and has stopped
-        consumer._2.onComplete(_ => self ! SimulationStopped())
+        // todo move code to create the environment factory outside of this function/class
+        //    so that it can be configured by the UI
+        // create the environment factory using the signal-function factory
+        val environmentFactory = PeriodicEnvironmentFactory(
+          initialDelay = Milliseconds(0),
+          signalPeriod = Milliseconds(50),
+          simulationDuration = Seconds(50),
+          signalsFunction = randomNeuronSignalGeneratorFunction(Milliseconds(25))
+        )
+
+        // todo the input selector needs to be passed in (configured from the UI)
+        // run the simulation, which will end after the time specified in the environment factory
+        seriesRunner.runSimulationSeries(
+          networkResults = networkResults.successes,
+          environmentFactory = environmentFactory,
+          inputNeuronSelector = """(in\-[1-7]$)""".r
+        )
+        // todo ---- end
+
+        log.info(s"(built) started simulation; id: $id")
 
         // transition to the running state
-        context.become(running(outgoingMessageActor, System.currentTimeMillis(), consumer._1))
+        context.become(running(outgoingMessageActor, System.currentTimeMillis(), consumerControl, networkResults, seriesRunner))
 
-      case NetworkCommand("destroy") =>
-        log.info(s"destroying network; id: $id")
-        outgoingMessageActor ! PoisonPill
-
-      case NetworkCommand(command) => log.error(s"(built) Invalid network command; command: $command")
+      case command =>
+        log.error(s"(built) Invalid network command; command: $command")
     }
+    //    case IncomingMessage(text) => text.parseJson.convertTo match {
+    //      case NetworkCommand(BUILD_COMMAND.name) =>
+    //        log.info(s"(built) Network built and ready to start; id: $id")
+    //
+    //      case NetworkCommand(START_COMMAND.name) =>
+    //        log.info(s"(built) starting network; id: $id; kafka-settings: $kafkaSettings")
+    //
+    //        // todo start the simulation
+    //        //        seriesRunner.runSimulationSeries(networkResults, , )
+    //
+    //        // transition to the running state
+    //        context.become(running(outgoingMessageActor, System.currentTimeMillis(), consumerControl, networkResults, seriesRunner))
+    //
+    //      case NetworkCommand(command) =>
+    //        log.error(s"(built) Invalid network command; command: $command")
+    //    }
+
+    case DestroyNetwork() =>
+      log.info(s"(built) destroying network; id: $id")
+      outgoingMessageActor ! PoisonPill
+
+      // delete the topic
+      val topics = topicsToDelete(1, id)
+      val kafkaAdminClient = AdminClient.create(asProperties(kafkaSettings))
+      kafkaAdminClient.deleteTopics(topics)
+      log.info(s"(built) deleted kafka topics; topics: $topics")
+      kafkaAdminClient.close(5, TimeUnit.SECONDS)
+
+      // suicide
+      self ! PoisonPill
+
     case _ => log.error(s"Invalid incoming message type")
   }
 
@@ -106,64 +226,70 @@ class NetworkCommander(id: String,
     *
     * @param outgoingMessageActor The web-socket actor to which to send the messages
     * @param startTime            The start time of the simulation (i.e. when the network transitioned to this state
-    * @param consumerControl A tuple holding the consumer control, which can be used to stop the kafka consumer, and a future
-    *                 that is completed once the simulation is stopped or completed
+    * @param consumerControl      A tuple holding the consumer control, which can be used to stop the kafka consumer, and a future
+    *                             that is completed once the simulation is stopped or completed
     * @return a receive instance
     */
   def running(outgoingMessageActor: ActorRef,
               startTime: Long,
-              consumerControl: Consumer.Control
+              consumerControl: Consumer.Control,
+              networkResults: SeriesRunner.CreateNetworkResults,
+              seriesRunner: SeriesRunner
              ): Receive = {
 
-    case SendRecord(record) =>
-      log.info(s"sending record: ${record.value().toString}")
-      outgoingMessageActor ! OutgoingMessage(record.value().toString)
-
     case SimulationStopped() =>
-      log.info(s"simulation completed; id: $id")
+      log.info(s"(running) simulation completed; id: $id")
       consumerControl.stop()
+      context.become(built(outgoingMessageActor, networkResults, consumerControl, seriesRunner))
 
-    case IncomingMessage(text) =>
-      text.parseJson.convertTo match {
-        case NetworkCommand("stop") =>
-          log.info(s"stopping network; id: $id")
-          consumerControl.stop()
-          context.become(built(outgoingMessageActor))
+    case IncomingMessage(text) => text.replaceAll("\"", "") match {
 
-        case NetworkCommand(command) => log.error(s"(running) Invalid network command; command: $command")
-      }
+      // todo add a case statement for incoming signals which calls the series-runner to send
+      //    a message to all the neurons in the incoming signals message
 
-    case message => log.error(s"Invalid message type; message type: ${message.getClass.getName}")
+      case STOP_COMMAND.name =>
+        log.info(s"(running) stopping network; id: $id")
+        consumerControl.stop()
+        context.become(built(outgoingMessageActor, networkResults, consumerControl, seriesRunner))
+
+      case command => log.error(s"(running) Invalid network command; command: $command")
+    }
+    //    case IncomingMessage(text) => text.parseJson.convertTo match {
+    //
+    //        case NetworkCommand(STOP_COMMAND.name) =>
+    //          log.info(s"(running) stopping network; id: $id")
+    //          consumerControl.stop()
+    //          context.become(built(outgoingMessageActor, networkResults, consumerControl, seriesRunner))
+    //
+    //        case NetworkCommand(command) => log.error(s"(running) Invalid network command; command: $command")
+    //      }
+
+    case message => log.error(s"(running) Invalid message type; message type: ${message.getClass.getName}")
   }
 
-//  /**
-//    * get a random number of messages (i.e. some random set of neurons spike)
-//    *
-//    * @param numNeurons The number of neurons for which signals are sent
-//    * @return a list of text-messages
-//    */
-//  private def messages(numNeurons: Int, startTime: Long): List[OutgoingMessage] = {
-//    val fireTime = System.currentTimeMillis() - startTime
-//    val neuronsFiring = Random.nextInt(numNeurons)
-//    Random
-//      .shuffle(Range(0, numNeurons).toList)
-//      .take(neuronsFiring)
-//      .map(index => OutgoingMessage(s"out-$index,$fireTime,1"))
-//  }
 
   private def consumerSettings(networkId: String, kafkaSettings: KafkaSettings): ConsumerSettings[String, String] = {
     ConsumerSettings(kafkaConfig, new StringDeserializer, new StringDeserializer)
       .withBootstrapServers(kafkaSettings.bootstrapServers.map(server => s"${server.host}:${server.port}").mkString(","))
       .withGroupId(networkId)
-      .withProperty(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "true")
+      .withProperty(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest")
   }
 }
 
 object NetworkCommander {
 
+  val BUILD_COMMAND: Symbol = 'build
+  val START_COMMAND: Symbol = 'start
+  val STOP_COMMAND: Symbol = 'stop
+  val DESTROY_COMMAND: Symbol = 'destroy
+
   sealed trait NetworkMessage
 
-  case class Build(actor: ActorRef)
+  case class BuildNetwork(actor: ActorRef, seriesRunner: SeriesRunner)
+
+  case class DestroyNetwork()
+
+  case class Link(actor: ActorRef)
 
   case class IncomingMessage(text: String) extends NetworkMessage
 
@@ -177,6 +303,63 @@ object NetworkCommander {
 
   case class SendRecord(record: ConsumerRecord[String, String])
 
-  def props(name: String, manager: ActorRef, kafkaConfig: Config, kafkaSettings: KafkaSettings) =
-    Props(new NetworkCommander(name, manager, kafkaConfig, kafkaSettings))
+  def props(name: String, networkDescription: String, manager: ActorRef, kafkaConfig: Config, kafkaSettings: KafkaSettings): Props =
+    Props(new NetworkCommander(name, networkDescription, manager, kafkaConfig, kafkaSettings))
+
+  /**
+    * Converts the scala configuration into a Java properties
+    *
+    * @param settings The kafka settings
+    * @return A java properties
+    */
+  def asProperties(settings: KafkaSettings): Properties = {
+    import scala.collection.JavaConverters._
+
+    val props = new Properties()
+    props.put(
+      AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG,
+      settings.bootstrapServers.map(server => s"${server.host}:${server.port}").asJava
+    )
+    props
+    //    import scala.collection.JavaConverters._
+    //    val props = new Properties()
+    //    config.entrySet().asScala.foreach(entry => props.put(entry.getKey, entry.getValue.unwrapped()))
+    //    props
+  }
+
+  def topicsToDelete(numSeries: Int, id: String): java.util.Collection[String] = {
+    import scala.collection.JavaConverters._
+    List.range(1, numSeries + 1).map(i => s"$id-$i").asJava
+  }
+
+  val random = new Random(System.currentTimeMillis())
+
+  /**
+    * Creates a function that accepts a sequence of neurons and a time. When the function is called, it sends
+    * a signal to one of the neurons in the set, picked at random, if the elapsed time since the last call
+    * exceeds the `minSignalInterval` time. For example, suppose that there are 10 input neurons
+    * (n,,1,,, n,,2,,, ...., n,,10,,), and the min signal time is 25 ms. If the environment has a period of 50 ms,
+    * then every 50 ms it will call the function returned from this method, handing it a sequence holding the
+    * input neurons, n,,i,,. This function checks if it has been called within the last 25 ms, and if not,
+    * picks one neuron from the sequence at random, resets the time, and returns a map holding the actor
+    * reference to the input neuron with the associate signal strength (in mV).
+    *
+    * @param minSignalInterval The smallest elapsed time from the previous call that a signal will be sent
+    * @return A function that accepts a sequence of input neurons and a time and returns a map of neurons that are
+    *         to receive a signal and the strength of that signal
+    */
+  private def randomNeuronSignalGeneratorFunction(minSignalInterval: Time): (Seq[ActorRef], Time) => Map[ActorRef, ElectricPotential] = {
+    var index: Int = 0
+    var startTime: Time = Milliseconds(0)
+
+    (neurons, time) => {
+      if (time - startTime > minSignalInterval) {
+        index = random.nextInt(neurons.length)
+        startTime = time
+      }
+      Map(neurons(index) -> Millivolts(1.05))
+      //      Map(neurons(random.nextInt(neurons.length)) -> Millivolts(1.05))
+    }
+  }
+
 }

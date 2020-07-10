@@ -224,9 +224,9 @@ class NetworkCommander(
       consumerControl.stop()
       context.become(built(outgoingMessageActor, networkResults, consumerControl, seriesRunner))
 
-    case IncomingSignal(sensorName, neuronIds, signal) =>
-      val actorSystems = networkResults.successes.map(result => result.system)
-      seriesRunner.sendSensorSignal(sensorName, signal, neuronIds, actorSystems)
+//    case IncomingSignal(sensorName, neuronIds, signal) =>
+//      val actorSystems = networkResults.successes.map(result => result.system)
+//      seriesRunner.sendSensorSignal(sensorName, signal, neuronIds, actorSystems)
 
 
     case IncomingMessage(text) =>

@@ -47,12 +47,12 @@ object SensorJsonSupport extends DefaultJsonProtocol {
       "signal" -> message.signal.toJson)
 
     def read(message: JsValue): IncomingSignal = {
-      message.asJsObject.getFields("name", "selector") match {
+      message.asJsObject.getFields("sensorName", "neuronIds", "signal") match {
         case Seq(JsString(sensorName), JsArray(neuronIds), signal) => IncomingSignal(
           sensorName = sensorName,
           neuronIds = neuronIds.map(id => id.convertTo[String]),
           signal = signal.convertTo[ElectricPotential])
-        case _ => deserializationError("AddSensorMessage expected")
+        case _ => deserializationError("IncomingSignal expected")
       }
     }
   }

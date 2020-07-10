@@ -32,8 +32,6 @@ class NetworkManagementRoutes(
 
   implicit val timeout: Timeout = Timeout(1.seconds)
 
-  // todo add delete route to delete a network-commander based on a network ID
-  //  lazy val networkManagementRoutes: Route = pathPrefix(networkManagePath / "network") {
   lazy val networkManagementRoutes: Route = concat(
     // create a network commander and build the network
     path(networkManagePath / "network") {

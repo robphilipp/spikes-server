@@ -1,11 +1,10 @@
 package com.digitalcipher.spiked.json
 
-import akka.http.scaladsl.marshallers.sprayjson.SprayJsonSupport
-import com.digitalcipher.spiked.NetworkCommander.{ AddSensorMessage, IncomingSignal }
+import com.digitalcipher.spiked.NetworkCommander.{AddSensorMessage, IncomingSignal}
 import spray.json.DefaultJsonProtocol
 import squants.electro.ElectricPotential
 
-class SensorJsonSupport extends DefaultJsonProtocol {
+object SensorJsonSupport extends DefaultJsonProtocol {
   /*
     import spray.json._
 

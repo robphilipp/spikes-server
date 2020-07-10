@@ -27,7 +27,7 @@ lazy val root = (project in file(".")).
       "com.typesafe.akka" %% "akka-stream-kafka" % "1.0.5",
 
       // core library for building spikes networks
-      "com.digitalcipher.spiked" %% "spikes-core" % "0.0.24-snapshot",
+      "com.digitalcipher.spiked" %% "spikes-core" % "0.0.25-snapshot",
 
       // json serialization/deserialization
       "io.spray" %% "spray-json" % "1.3.5",

@@ -165,7 +165,6 @@ class NetworkCommander(
               // reset all the sensor clocks to "now"
               val startTime = System.currentTimeMillis()
               seriesRunner.runSimulationSeries(networkResults.successes)
-//              seriesRunner.resetSensorClocks(systemNames, startTime)
 
               // transition to the running state
               context.become(running(outgoingMessageActor, startTime, consumerControl, networkResults, seriesRunner))

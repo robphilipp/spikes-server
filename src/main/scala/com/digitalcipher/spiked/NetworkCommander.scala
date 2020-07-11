@@ -157,12 +157,18 @@ class NetworkCommander(
           case START_COMMAND.name =>
             log.info(s"(built) starting network; id: $id; kafka-settings: $kafkaSettings")
 
-            if (seriesRunner.hasSensors(networkResults.successes.map(result => result.system.name))) {
+            val systemNames = networkResults.successes.map(result => result.system.name)
+            if (seriesRunner.hasSensors(systemNames)) {
 
-              log.info(s"(built) started simulation; id: $id; sensors: ${seriesRunner.hasSensors(networkResults.successes.map(result => result.system.name))}")
+              log.info(s"(built) started simulation; id: $id; sensors: ${seriesRunner.hasSensors(systemNames)}")
+
+              // reset all the sensor clocks to "now"
+              val startTime = System.currentTimeMillis()
+              seriesRunner.runSimulationSeries(networkResults.successes)
+              seriesRunner.resetSensorClocks(systemNames, startTime)
 
               // transition to the running state
-              context.become(running(outgoingMessageActor, System.currentTimeMillis(), consumerControl, networkResults, seriesRunner))
+              context.become(running(outgoingMessageActor, startTime, consumerControl, networkResults, seriesRunner))
             } else {
               log.error(s"(built) cannot start simulation because no sensors have been created")
 //              //    so that it can be configured by the UI

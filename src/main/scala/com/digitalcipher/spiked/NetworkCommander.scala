@@ -2,7 +2,6 @@ package com.digitalcipher.spiked
 
 import java.util.Properties
 import java.util.concurrent.TimeUnit
-
 import akka.Done
 import akka.actor.{Actor, ActorLogging, ActorRef, PoisonPill, Props}
 import akka.kafka.scaladsl.Consumer
@@ -11,6 +10,7 @@ import akka.stream.ActorMaterializer
 import akka.stream.scaladsl.{Keep, Sink}
 import com.digitalcipher.spiked.NetworkCommander._
 import com.digitalcipher.spiked.apputils.SeriesRunner
+import com.digitalcipher.spiked.apputils.SeriesRunner.SensorAddResult
 import com.digitalcipher.spiked.routes.NetworkManagementRoutes.KafkaSettings
 import com.typesafe.config.Config
 import org.apache.kafka.clients.admin.{AdminClient, AdminClientConfig}
@@ -141,20 +141,13 @@ class NetworkCommander(
       import spray.json._
 
       Try(JsonParser(cleanJson(text))) match {
-        case Success(value) => Try(value.convertTo[AddSensorMessage]) match {
-          case Success(AddSensorMessage(name, selector)) =>
+        case Success(value) => Try(value.convertTo[StartNetworkMessage]) match {
+
+          // successfully parsed JSON start-network message message with the sensor description
+          case Success(StartNetworkMessage(name, selector)) =>
             log.info(s"(built) adding sensor to network; id: $id; sensor_name: $name; selector: ${selector.regex}")
             seriesRunner.addSensor(name, selector, networkResults.successes)
 
-          case _ =>
-            log.error(s"(built) invalid message for built state; id: $id; message: $text")
-        }
-
-        case Failure(exception) => text.replaceAll("\"", "") match {
-          case BUILD_COMMAND.name =>
-            log.info(s"(built) Network built and ready to start; id: $id")
-
-          case START_COMMAND.name =>
             log.info(s"(built) starting network; id: $id; kafka-settings: $kafkaSettings")
 
             val systemNames = networkResults.successes.map(result => result.system.name)
@@ -170,21 +163,55 @@ class NetworkCommander(
               context.become(running(outgoingMessageActor, startTime, consumerControl, networkResults, seriesRunner))
             } else {
               log.error(s"(built) cannot start simulation because no sensors have been created")
-//              //    so that it can be configured by the UI
-//              // create the environment factory using the signal-function factory
-//              val environmentFactory = PeriodicEnvironmentFactory(
-//                initialDelay = Milliseconds(0),
-//                signalPeriod = Milliseconds(50),
-//                simulationDuration = Seconds(50),
-//                signalsFunction = randomNeuronSignalGeneratorFunction(Milliseconds(25)))
-//
-//              // run the simulation, which will end after the time specified in the environment factory
-//              seriesRunner.runSimulationSeries(
-//                networkResults = networkResults.successes,
-//                environmentFactory = environmentFactory,
-//                inputNeuronSelector = """(in\-[1-7]$)""".r)
-//              // todo ---- end
             }
+          case _ => log.error(s"(built) invalid message for built state; id: $id; message: $text")
+        }
+
+//        // successfully parsed the JSON message, which is for adding sensors
+//        case Success(value) => Try(value.convertTo[AddSensorMessage]) match {
+//          case Success(AddSensorMessage(name, selector)) =>
+//            log.info(s"(built) adding sensor to network; id: $id; sensor_name: $name; selector: ${selector.regex}")
+//            seriesRunner.addSensor(name, selector, networkResults.successes)
+//          case _ => log.error(s"(built) invalid message for built state; id: $id; message: $text")
+//        }
+
+        // failed to parse the JSON message, so it must be one of the commands to build or start
+        // the network
+        case Failure(exception) => text.replaceAll("\"", "") match {
+          case BUILD_COMMAND.name =>
+            log.info(s"(built) Network built and ready to start; id: $id")
+
+//          case START_COMMAND.name =>
+//            log.info(s"(built) starting network; id: $id; kafka-settings: $kafkaSettings")
+//
+//            val systemNames = networkResults.successes.map(result => result.system.name)
+//            if (seriesRunner.hasSensors(systemNames)) {
+//
+//              log.info(s"(built) started simulation; id: $id; sensors: ${seriesRunner.hasSensors(systemNames)}")
+//
+//              // reset all the sensor clocks to "now"
+//              val startTime = System.currentTimeMillis()
+//              seriesRunner.runSimulationSeries(networkResults.successes)
+//
+//              // transition to the running state
+//              context.become(running(outgoingMessageActor, startTime, consumerControl, networkResults, seriesRunner))
+//            } else {
+//              log.error(s"(built) cannot start simulation because no sensors have been created")
+//              //              //    so that it can be configured by the UI
+//              //              // create the environment factory using the signal-function factory
+//              //              val environmentFactory = PeriodicEnvironmentFactory(
+//              //                initialDelay = Milliseconds(0),
+//              //                signalPeriod = Milliseconds(50),
+//              //                simulationDuration = Seconds(50),
+//              //                signalsFunction = randomNeuronSignalGeneratorFunction(Milliseconds(25)))
+//              //
+//              //              // run the simulation, which will end after the time specified in the environment factory
+//              //              seriesRunner.runSimulationSeries(
+//              //                networkResults = networkResults.successes,
+//              //                environmentFactory = environmentFactory,
+//              //                inputNeuronSelector = """(in\-[1-7]$)""".r)
+//              //              // todo ---- end
+//            }
         }
 
         case command =>
@@ -229,9 +256,9 @@ class NetworkCommander(
       consumerControl.stop()
       context.become(built(outgoingMessageActor, networkResults, consumerControl, seriesRunner))
 
-//    case IncomingSignal(sensorName, neuronIds, signal) =>
-//      val actorSystems = networkResults.successes.map(result => result.system)
-//      seriesRunner.sendSensorSignal(sensorName, signal, neuronIds, actorSystems)
+    //    case IncomingSignal(sensorName, neuronIds, signal) =>
+    //      val actorSystems = networkResults.successes.map(result => result.system)
+    //      seriesRunner.sendSensorSignal(sensorName, signal, neuronIds, actorSystems)
 
 
     case IncomingMessage(text) =>
@@ -269,6 +296,7 @@ class NetworkCommander(
     * `"{\"name\":\"test-sensor\",\"selector\":\"^in-1$\"}"`. this string needs to be converted to a
     * string-representation of an object, so we need to get rid of the \ characters (escape) and the
     * leading and trailing quotes.
+    *
     * @param text The stringified JSON (i.e. javascript JSON.stringify(..))
     * @return A string-representation of a json object
     */
@@ -287,6 +315,7 @@ object NetworkCommander {
   case class BuildNetwork(actor: ActorRef, seriesRunner: SeriesRunner)
 
   case class AddSensorMessage(name: String, selector: Regex) extends NetworkMessage
+  case class StartNetworkMessage(name: String, selector: Regex) extends NetworkMessage
 
   case class DestroyNetwork()
 

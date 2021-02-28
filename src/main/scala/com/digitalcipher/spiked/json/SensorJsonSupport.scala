@@ -1,6 +1,6 @@
 package com.digitalcipher.spiked.json
 
-import com.digitalcipher.spiked.NetworkCommander.{AddSensorMessage, IncomingSignal}
+import com.digitalcipher.spiked.NetworkCommander.{AddSensorMessage, IncomingSignal, StartNetworkMessage}
 import spray.json.DefaultJsonProtocol
 import squants.electro.ElectricPotential
 
@@ -34,6 +34,21 @@ object SensorJsonSupport extends DefaultJsonProtocol {
           name = sensorName,
           selector = selector.r)
         case _ => deserializationError("AddSensorMessage expected")
+      }
+    }
+  }
+
+  implicit object StartNetworkMessageFormat extends RootJsonFormat[StartNetworkMessage] {
+    def write(message: StartNetworkMessage): JsObject = JsObject(
+      "name" -> JsString(message.name),
+      "selector" -> JsString(message.selector.regex))
+
+    def read(message: JsValue): StartNetworkMessage = {
+      message.asJsObject.getFields("name", "selector") match {
+        case Seq(JsString(sensorName), JsString(selector)) => StartNetworkMessage(
+          name = sensorName,
+          selector = selector.r)
+        case _ => deserializationError("StartNetworkMessage expected")
       }
     }
   }

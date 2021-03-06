@@ -9,6 +9,7 @@ import akka.stream.ActorMaterializer
 import akka.util.Timeout
 import com.digitalcipher.spiked.apputils.SpikesAppUtils.loadConfigFrom
 import com.digitalcipher.spiked.routes.{NetworkManagementRoutes, StaticContentRoutes, WebSocketRoutes}
+import com.typesafe.config.ConfigFactory
 
 import java.nio.file.{Path, Paths}
 import java.util.concurrent.TimeUnit
@@ -22,8 +23,9 @@ import scala.util.{Failure, Success}
  * then streams data to the real-time visualizations.
  */
 object SpikedServer extends App {
-  // load the configuration
-  private val config = loadConfigFrom("application.conf")
+  // load the configuration from application.conf and spikes core reference.conf, and then merge the two
+  // configurations, such that application.conf values override reference.conf.
+  private val config = ConfigFactory.parseResources("application.conf").withFallback(ConfigFactory.load())
   private val hostname = config.getString("http.ip")
   private val port = config.getInt("http.port")
   private val kafkaConsumerConfig = config.getConfig("akka.kafka.consumer")

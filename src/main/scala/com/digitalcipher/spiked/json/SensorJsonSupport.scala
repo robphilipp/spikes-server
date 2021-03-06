@@ -1,6 +1,6 @@
 package com.digitalcipher.spiked.json
 
-import com.digitalcipher.spiked.NetworkCommander.{AddSensorMessage, IncomingSignal, StartNetworkMessage}
+import com.digitalcipher.spiked.NetworkCommander.{ AddSensorMessage, IncomingSignal, StartNetworkMessage }
 import spray.json.DefaultJsonProtocol
 import squants.electro.ElectricPotential
 

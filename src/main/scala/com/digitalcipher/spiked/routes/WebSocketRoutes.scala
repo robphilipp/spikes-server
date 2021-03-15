@@ -98,7 +98,7 @@ class WebSocketRoutes(webSocketPath: String,
     // messages from the network commander that go out to the web-socket client
     val outgoingMessages: Source[Message, NotUsed] =
       Source
-        .actorRef[NetworkCommander.OutgoingMessage](10, OverflowStrategy.fail)
+        .actorRef[NetworkCommander.OutgoingMessage](100, OverflowStrategy.fail)
         .mapMaterializedValue({outgoingMessageActor =>
           val seriesRunner = new SeriesRunner(
             timeFactor = 1,

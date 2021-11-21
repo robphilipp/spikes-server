@@ -1,7 +1,5 @@
 package com.digitalcipher.spiked.routes
 
-import java.util.concurrent.TimeoutException
-
 import akka.NotUsed
 import akka.actor.{ActorRef, ActorSystem, PoisonPill}
 import akka.http.scaladsl.model._
@@ -12,14 +10,12 @@ import akka.pattern.ask
 import akka.stream.OverflowStrategy
 import akka.stream.scaladsl.{Flow, Sink, Source}
 import akka.util.Timeout
-import com.digitalcipher.spiked
 import com.digitalcipher.spiked.NetworkCommander
 import com.digitalcipher.spiked.NetworkCommander.BuildNetwork
 import com.digitalcipher.spiked.NetworkCommanderManager.RetrieveNetworkCommanderById
-import com.digitalcipher.spiked.apputils.SeriesRunner
-import com.digitalcipher.spiked.apputils.SeriesRunner.KafkaEventLogging
 import com.typesafe.config.Config
 
+import java.util.concurrent.TimeoutException
 import scala.concurrent.Await
 import scala.concurrent.duration._
 
@@ -101,23 +97,11 @@ class WebSocketRoutes(webSocketPath: String,
         .actorRef[NetworkCommander.OutgoingMessage](100, OverflowStrategy.fail)
         .mapMaterializedValue({outgoingMessageActor =>
 
-          // todo don't instantiate the series runner here, but rather in the NetworkCommander when
-          //    the BuildNetwork command is sent from the client, which also needs the simulation time-factor
-
-//          val seriesRunner = new SeriesRunner(
-//            timeFactor = 1,
-//            appLoggerName = "spikes-network-server",
-//            config = serverConfig,
-//            systemBaseName = networkCommanderId,
-//            eventLogging = Seq(KafkaEventLogging(topic = seriesNumber => s"$networkCommanderId-$seriesNumber"))
-//          )
 
           // you need to send a Build message to get the actor in a state
           // where it's ready to receive and send messages, we used the mapMaterialized value
           // so we can get access to it as soon as this is materialized
           networkCommander ! BuildNetwork(outgoingMessageActor, serverConfig, networkCommanderId)
-//          networkCommander ! BuildNetwork(outgoingMessageActor, seriesRunner)
-//          networkCommander ! NetworkCommander.Link(outgoingMessageActor)
           NotUsed
         })
         .map({

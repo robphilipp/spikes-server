@@ -1,17 +1,14 @@
 package com.digitalcipher.spiked
 
-import java.util.Properties
-import java.util.concurrent.TimeUnit
 import akka.Done
 import akka.actor.{Actor, ActorLogging, ActorRef, PoisonPill, Props}
 import akka.kafka.scaladsl.Consumer
 import akka.kafka.{ConsumerSettings, Subscriptions}
 import akka.stream.ActorMaterializer
 import akka.stream.scaladsl.{Keep, Sink}
-import akka.util.Timeout
 import com.digitalcipher.spiked.NetworkCommander._
 import com.digitalcipher.spiked.apputils.SeriesRunner
-import com.digitalcipher.spiked.apputils.SeriesRunner.{KafkaEventLogging, SensorAddResult}
+import com.digitalcipher.spiked.apputils.SeriesRunner.KafkaEventLogging
 import com.digitalcipher.spiked.routes.NetworkManagementRoutes.KafkaSettings
 import com.typesafe.config.Config
 import org.apache.kafka.clients.admin.{AdminClient, AdminClientConfig}
@@ -21,6 +18,8 @@ import squants.Time
 import squants.electro.{ElectricPotential, Millivolts}
 import squants.time.Milliseconds
 
+import java.util.Properties
+import java.util.concurrent.TimeUnit
 import scala.concurrent.duration.Duration
 import scala.concurrent.{Await, ExecutionContextExecutor, Future}
 import scala.util.matching.Regex
@@ -57,7 +56,6 @@ class NetworkCommander(
     // are decoupled, except through this actor. This source sends messages to the web-socket
     // sink, which sends them back to the UI client.
     case BuildNetwork(outgoingMessageActor, serverConfig, networkCommanderId) =>
-      //    case BuildNetwork(outgoingMessageActor, seriesRunner) =>
       // as the network is being built, it will publish messages describing the network. so at this
       // point we already need to start consuming the messages and sending them down the websocket
       // to the client UI. Note that this consumer will read all the messages from kafka and forward
@@ -75,7 +73,6 @@ class NetworkCommander(
 
       // transition to the state where the network is built, but not yet running
       context.become(ready(outgoingMessageActor, consumerControl, serverConfig, networkCommanderId))
-    //      context.become(ready(outgoingMessageActor, consumerControl, seriesRunner))
   }
 
   /**
@@ -92,13 +89,13 @@ class NetworkCommander(
     * @param consumerControl      The consumer control that allows the simulation to be stopped and
     *                             when the simulation is complete, dispatches message that the simulation
     *                             has stopped
-    * @param seriesRunner         The spikes network runner that runs the simulation
+    * @param serverConfig         The server configuration information
+    * @param networkCommanderId   The ID of the network commander
     * @return A receive instance
     */
   def ready(
              outgoingMessageActor: ActorRef,
              consumerControl: Consumer.Control,
-             //             seriesRunner: SeriesRunner
              serverConfig: Config,
              networkCommanderId: String,
            ): Receive = {
@@ -155,53 +152,8 @@ class NetworkCommander(
         }
 
         case command => log.error(s"(ready) Invalid network command; id: $id; command: $command")
-
-        //      case BUILD_COMMAND.name =>
-        //        log.info(s"(ready) building network commander; id: $id")
-        //
-        //        // todo create the series-runner here, and the build command needs to have the time-factor (somehow)
-        //        //    maybe change the build command to be an object (like start, destroy.. {timeFactor: N})
-        //
-        //        // build the network
-        //        val networkResults = seriesRunner.createNetworks(num = 1, networkDescription, reparseReport = false)
-        //        if (networkResults.hasFailures) {
-        //          seriesRunner.logger.error(s"Failed to create all networks; failures: ${networkResults.failures.mkString}")
-        //        }
-        //
-        //        log.info(s"(ready) network built and ready to run; id: $id; kafka-settings: $kafkaSettings")
-        //        context.become(built(outgoingMessageActor, networkResults, consumerControl, seriesRunner))
-        //
-        //      case command => log.error(s"(ready) Invalid network command; command: $command")
       }
   }
-
-  private def buildNetwork() = {
-
-  }
-
-  //  def ready(
-  //    outgoingMessageActor: ActorRef,
-  //    consumerControl: Consumer.Control,
-  //    seriesRunner: SeriesRunner): Receive = {
-  //    case IncomingMessage(text) => text.replaceAll("\"", "") match {
-  //      case BUILD_COMMAND.name =>
-  //        log.info(s"(ready) building network commander; id: $id")
-  //
-  //        // todo create the series-runner here, and the build command needs to have the time-factor (somehow)
-  //        //    maybe change the build command to be an object (like start, destroy.. {timeFactor: N})
-  //
-  //        // build the network
-  //        val networkResults = seriesRunner.createNetworks(num = 1, networkDescription, reparseReport = false)
-  //        if (networkResults.hasFailures) {
-  //          seriesRunner.logger.error(s"Failed to create all networks; failures: ${networkResults.failures.mkString}")
-  //        }
-  //
-  //        log.info(s"(ready) network built and ready to run; id: $id; kafka-settings: $kafkaSettings")
-  //        context.become(built(outgoingMessageActor, networkResults, consumerControl, seriesRunner))
-  //
-  //      case command => log.error(s"(ready) Invalid network command; command: $command")
-  //    }
-  //  }
 
   /**
     * This function describes the `built` state. In this state the network has been built and is ready
@@ -225,7 +177,8 @@ class NetworkCommander(
              outgoingMessageActor: ActorRef,
              networkResults: SeriesRunner.CreateNetworkResults,
              consumerControl: Consumer.Control,
-             seriesRunner: SeriesRunner): Receive = {
+             seriesRunner: SeriesRunner
+           ): Receive = {
 
     case IncomingMessage(text) =>
       import com.digitalcipher.spiked.json.SensorJsonSupport._
@@ -307,10 +260,6 @@ class NetworkCommander(
       consumerControl.stop()
       context.become(built(outgoingMessageActor, networkResults, consumerControl, seriesRunner))
 
-    //    case IncomingSignal(sensorName, neuronIds, signal) =>
-    //      val actorSystems = networkResults.successes.map(result => result.system)
-    //      seriesRunner.sendSensorSignal(sensorName, signal, neuronIds, actorSystems)
-
     case IncomingMessage(text) =>
       import com.digitalcipher.spiked.json.SensorJsonSupport._
       import spray.json._
@@ -363,7 +312,6 @@ object NetworkCommander {
   sealed trait NetworkMessage
 
   case class BuildNetwork(actor: ActorRef, serverConfig: Config, networkCommanderId: String)
-  //  case class BuildNetwork(actor: ActorRef, seriesRunner: SeriesRunner)
 
   case class AddSensorMessage(name: String, selector: Regex) extends NetworkMessage
 
@@ -443,7 +391,6 @@ object NetworkCommander {
         startTime = time
       }
       Map(neurons(index) -> Millivolts(1.05))
-      //      Map(neurons(random.nextInt(neurons.length)) -> Millivolts(1.05))
     }
   }
 

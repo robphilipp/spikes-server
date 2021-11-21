@@ -1,32 +1,27 @@
 package com.digitalcipher.spiked.routes
 
+import akka.actor.{ActorRef, ActorSystem}
+import akka.http.scaladsl.server.Directives._
+import akka.http.scaladsl.server.Route
+import akka.pattern.ask
+import akka.util.Timeout
+import com.digitalcipher.spiked.NetworkCommander
+import com.digitalcipher.spiked.NetworkCommanderManager.{AddNetworkCommander, DeleteNetworkCommander}
+import com.digitalcipher.spiked.json.NetworkManagementJsonSupport
+import com.digitalcipher.spiked.routes.NetworkManagementRoutes.{CreateNetworkCommander, CreateNetworkCommanderResponse, DeleteNetworkCommanderResponse}
+import com.typesafe.config.Config
+
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import java.util.Base64
-
-import akka.actor.{ ActorRef, ActorSystem }
-import akka.pattern.ask
-import akka.http.scaladsl.server.Directives._
-import akka.http.scaladsl.server.Route
-import akka.util.Timeout
-import com.digitalcipher.spiked.NetworkCommander
-import com.digitalcipher.spiked.NetworkCommander.BuildNetwork
-import com.digitalcipher.spiked.NetworkCommanderManager.{ AddNetworkCommander, DeleteNetworkCommander }
-import com.digitalcipher.spiked.apputils.SeriesRunner
-import com.digitalcipher.spiked.apputils.SeriesRunner.KafkaEventLogging
-import com.digitalcipher.spiked.json.NetworkManagementJsonSupport
-import com.digitalcipher.spiked.routes.NetworkManagementRoutes.{ CreateNetworkCommander, CreateNetworkCommanderResponse, DeleteNetworkCommanderResponse }
-import com.typesafe.config.Config
-
 import scala.concurrent.Await
 import scala.util.Random
 
-class NetworkManagementRoutes(
-  networkManagePath: String,
-  networkCommanderManager: ActorRef,
-  actorSystem: ActorSystem,
-  //                              serverConfig: Config,
-  kafkaConsumerConfig: Config) extends NetworkManagementJsonSupport {
+class NetworkManagementRoutes(networkManagePath: String,
+                              networkCommanderManager: ActorRef,
+                              actorSystem: ActorSystem,
+                              kafkaConsumerConfig: Config
+                             ) extends NetworkManagementJsonSupport {
 
   import scala.concurrent.duration._
 

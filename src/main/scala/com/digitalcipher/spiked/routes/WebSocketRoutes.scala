@@ -100,6 +100,10 @@ class WebSocketRoutes(webSocketPath: String,
       Source
         .actorRef[NetworkCommander.OutgoingMessage](100, OverflowStrategy.fail)
         .mapMaterializedValue({outgoingMessageActor =>
+
+          // todo don't instantiate the series runner here, but rather in the NetworkCommander when
+          //    the BuildNetwork command is sent from the client, which also needs the simulation time-factor
+
           val seriesRunner = new SeriesRunner(
             timeFactor = 1,
             appLoggerName = "spikes-network-server",

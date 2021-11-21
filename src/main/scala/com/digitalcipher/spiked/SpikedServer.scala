@@ -1,6 +1,6 @@
 package com.digitalcipher.spiked
 
-import akka.actor.{ActorRef, ActorSystem, Props}
+import akka.actor.{ ActorRef, ActorSystem, Props }
 import akka.event.Logging
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.server.Directives._
@@ -8,15 +8,15 @@ import akka.http.scaladsl.server.Route
 import akka.stream.ActorMaterializer
 import akka.util.Timeout
 import com.digitalcipher.spiked.apputils.SpikesAppUtils.loadConfigFrom
-import com.digitalcipher.spiked.routes.{NetworkManagementRoutes, StaticContentRoutes, WebSocketRoutes}
+import com.digitalcipher.spiked.routes.{ NetworkManagementRoutes, StaticContentRoutes, WebSocketRoutes }
 import com.typesafe.config.ConfigFactory
 
-import java.nio.file.{Path, Paths}
+import java.nio.file.{ Path, Paths }
 import java.util.concurrent.TimeUnit
 import scala.collection.JavaConverters._
-import scala.concurrent.duration.{Duration, _}
-import scala.concurrent.{Await, ExecutionContext, Future}
-import scala.util.{Failure, Success}
+import scala.concurrent.duration.{ Duration, _ }
+import scala.concurrent.{ Await, ExecutionContext, Future }
+import scala.util.{ Failure, Success }
 
 /**
  * Server for static content and web sockets. Serves up the web page and

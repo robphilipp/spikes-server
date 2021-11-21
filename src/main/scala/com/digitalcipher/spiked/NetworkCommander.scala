@@ -101,6 +101,9 @@ class NetworkCommander(
       case BUILD_COMMAND.name =>
         log.info(s"(ready) building network commander; id: $id")
 
+        // todo create the series-runner here, and the build command needs to have the time-factor (somehow)
+        //    maybe change the build command to be an object (like start, destroy.. {timeFactor: N})
+
         // build the network
         val networkResults = seriesRunner.createNetworks(num = 1, networkDescription, reparseReport = false)
         if (networkResults.hasFailures) {
@@ -169,51 +172,11 @@ class NetworkCommander(
           case _ => log.error(s"(built) invalid message for built state; id: $id; message: $text")
         }
 
-        //        // successfully parsed the JSON message, which is for adding sensors
-        //        case Success(value) => Try(value.convertTo[AddSensorMessage]) match {
-        //          case Success(AddSensorMessage(name, selector)) =>
-        //            log.info(s"(built) adding sensor to network; id: $id; sensor_name: $name; selector: ${selector.regex}")
-        //            seriesRunner.addSensor(name, selector, networkResults.successes)
-        //          case _ => log.error(s"(built) invalid message for built state; id: $id; message: $text")
-        //        }
-
         // failed to parse the JSON message, so it must be one of the commands to build or start
         // the network
         case Failure(exception) => text.replaceAll("\"", "") match {
           case BUILD_COMMAND.name =>
             log.info(s"(built) Network built and ready to start; id: $id")
-
-          //          case START_COMMAND.name =>
-          //            log.info(s"(built) starting network; id: $id; kafka-settings: $kafkaSettings")
-          //
-          //            val systemNames = networkResults.successes.map(result => result.system.name)
-          //            if (seriesRunner.hasSensors(systemNames)) {
-          //
-          //              log.info(s"(built) started simulation; id: $id; sensors: ${seriesRunner.hasSensors(systemNames)}")
-          //
-          //              // reset all the sensor clocks to "now"
-          //              val startTime = System.currentTimeMillis()
-          //              seriesRunner.runSimulationSeries(networkResults.successes)
-          //
-          //              // transition to the running state
-          //              context.become(running(outgoingMessageActor, startTime, consumerControl, networkResults, seriesRunner))
-          //            } else {
-          //              log.error(s"(built) cannot start simulation because no sensors have been created")
-          //              //              //    so that it can be configured by the UI
-          //              //              // create the environment factory using the signal-function factory
-          //              //              val environmentFactory = PeriodicEnvironmentFactory(
-          //              //                initialDelay = Milliseconds(0),
-          //              //                signalPeriod = Milliseconds(50),
-          //              //                simulationDuration = Seconds(50),
-          //              //                signalsFunction = randomNeuronSignalGeneratorFunction(Milliseconds(25)))
-          //              //
-          //              //              // run the simulation, which will end after the time specified in the environment factory
-          //              //              seriesRunner.runSimulationSeries(
-          //              //                networkResults = networkResults.successes,
-          //              //                environmentFactory = environmentFactory,
-          //              //                inputNeuronSelector = """(in\-[1-7]$)""".r)
-          //              //              // todo ---- end
-          //            }
         }
 
         case command =>

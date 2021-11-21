@@ -104,18 +104,19 @@ class WebSocketRoutes(webSocketPath: String,
           // todo don't instantiate the series runner here, but rather in the NetworkCommander when
           //    the BuildNetwork command is sent from the client, which also needs the simulation time-factor
 
-          val seriesRunner = new SeriesRunner(
-            timeFactor = 1,
-            appLoggerName = "spikes-network-server",
-            config = serverConfig,
-            systemBaseName = networkCommanderId,
-            eventLogging = Seq(KafkaEventLogging(topic = seriesNumber => s"$networkCommanderId-$seriesNumber"))
-          )
+//          val seriesRunner = new SeriesRunner(
+//            timeFactor = 1,
+//            appLoggerName = "spikes-network-server",
+//            config = serverConfig,
+//            systemBaseName = networkCommanderId,
+//            eventLogging = Seq(KafkaEventLogging(topic = seriesNumber => s"$networkCommanderId-$seriesNumber"))
+//          )
 
           // you need to send a Build message to get the actor in a state
           // where it's ready to receive and send messages, we used the mapMaterialized value
           // so we can get access to it as soon as this is materialized
-          networkCommander ! BuildNetwork(outgoingMessageActor, seriesRunner)
+          networkCommander ! BuildNetwork(outgoingMessageActor, serverConfig, networkCommanderId)
+//          networkCommander ! BuildNetwork(outgoingMessageActor, seriesRunner)
 //          networkCommander ! NetworkCommander.Link(outgoingMessageActor)
           NotUsed
         })

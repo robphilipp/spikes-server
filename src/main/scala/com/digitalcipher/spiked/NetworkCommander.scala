@@ -1,8 +1,5 @@
 package com.digitalcipher.spiked
 
-import java.util.Properties
-import java.util.concurrent.TimeUnit
-
 import akka.Done
 import akka.actor.{Actor, ActorLogging, ActorRef, PoisonPill, Props}
 import akka.kafka.scaladsl.Consumer
@@ -11,7 +8,7 @@ import akka.stream.ActorMaterializer
 import akka.stream.scaladsl.{Keep, Sink}
 import com.digitalcipher.spiked.NetworkCommander._
 import com.digitalcipher.spiked.apputils.SeriesRunner
-import com.digitalcipher.spiked.inputs.PeriodicEnvironmentFactory
+import com.digitalcipher.spiked.apputils.SeriesRunner.KafkaEventLogging
 import com.digitalcipher.spiked.routes.NetworkManagementRoutes.KafkaSettings
 import com.typesafe.config.Config
 import org.apache.kafka.clients.admin.{AdminClient, AdminClientConfig}
@@ -19,17 +16,21 @@ import org.apache.kafka.clients.consumer.{ConsumerConfig, ConsumerRecord}
 import org.apache.kafka.common.serialization.StringDeserializer
 import squants.Time
 import squants.electro.{ElectricPotential, Millivolts}
-import squants.time.{Milliseconds, Seconds}
+import squants.time.Milliseconds
 
-import scala.concurrent.{ExecutionContextExecutor, Future}
-import scala.util.Random
+import java.util.Properties
+import java.util.concurrent.TimeUnit
+import scala.concurrent.duration.Duration
+import scala.concurrent.{Await, ExecutionContextExecutor, Future}
+import scala.util.matching.Regex
+import scala.util.{Failure, Random, Success, Try}
 
-class NetworkCommander(id: String,
-                       networkDescription: String,
-                       manager: ActorRef,
-                       kafkaConfig: Config,
-                       kafkaSettings: KafkaSettings
-                      ) extends Actor with ActorLogging {
+class NetworkCommander(
+                        id: String,
+                        networkDescription: String,
+                        manager: ActorRef,
+                        kafkaConfig: Config,
+                        kafkaSettings: KafkaSettings) extends Actor with ActorLogging {
 
   implicit val executionContext: ExecutionContextExecutor = context.dispatcher
   implicit val materializer: ActorMaterializer = ActorMaterializer.create(context)
@@ -54,7 +55,7 @@ class NetworkCommander(id: String,
     // the handler returns a flow. The flow is a sink-to-source flow where the sink and source
     // are decoupled, except through this actor. This source sends messages to the web-socket
     // sink, which sends them back to the UI client.
-    case BuildNetwork(outgoingMessageActor, seriesRunner) =>
+    case BuildNetwork(outgoingMessageActor, serverConfig, networkCommanderId) =>
       // as the network is being built, it will publish messages describing the network. so at this
       // point we already need to start consuming the messages and sending them down the websocket
       // to the client UI. Note that this consumer will read all the messages from kafka and forward
@@ -71,7 +72,7 @@ class NetworkCommander(id: String,
       // todo deal with the error condition properly
 
       // transition to the state where the network is built, but not yet running
-      context.become(ready(outgoingMessageActor, consumerControl, seriesRunner))
+      context.become(ready(outgoingMessageActor, consumerControl, serverConfig, networkCommanderId))
   }
 
   /**
@@ -88,43 +89,70 @@ class NetworkCommander(id: String,
     * @param consumerControl      The consumer control that allows the simulation to be stopped and
     *                             when the simulation is complete, dispatches message that the simulation
     *                             has stopped
-    * @param seriesRunner         The spikes network runner that runs the simulation
+    * @param serverConfig         The server configuration information
+    * @param networkCommanderId   The ID of the network commander
     * @return A receive instance
     */
-  def ready(outgoingMessageActor: ActorRef,
-            consumerControl: Consumer.Control,
-            seriesRunner: SeriesRunner
+  def ready(
+             outgoingMessageActor: ActorRef,
+             consumerControl: Consumer.Control,
+             serverConfig: Config,
+             networkCommanderId: String,
            ): Receive = {
-    case IncomingMessage(text) => text.replaceAll("\"", "") match {
-      case BUILD_COMMAND.name =>
-        log.info(s"(ready) building network commander; id: $id")
+    case IncomingMessage(text) =>
+      import com.digitalcipher.spiked.json.JsonSupport._
+      import spray.json._
 
-        // build the network
-        val networkResults = seriesRunner.createNetworks(num = 1, description = networkDescription, reparseReport = false)
-        if (networkResults.hasFailures) {
-          seriesRunner.logger.error(s"Failed to create all networks; failures: ${networkResults.failures.mkString}")
+      Try(JsonParser(cleanJson(text))) match {
+        case Success(value) => Try(value.convertTo[BuildNetworkMessage]) match {
+          case Success(BuildNetworkMessage(timeFactor)) =>
+            log.info(s"(ready) building network commander; id: $id; time-factor: $timeFactor")
+
+            val seriesRunner = new SeriesRunner(
+              timeFactor = timeFactor,
+              appLoggerName = "spikes-network-server",
+              config = serverConfig,
+              systemBaseName = networkCommanderId,
+              eventLogging = Seq(KafkaEventLogging(topic = seriesNumber => s"$networkCommanderId-$seriesNumber"))
+            )
+
+            // build the network
+            val networkResults = seriesRunner.createNetworks(num = 1, networkDescription, reparseReport = false)
+            if (networkResults.hasFailures) {
+              seriesRunner.logger.error(s"Failed to create all networks; failures: ${networkResults.failures.mkString}")
+            }
+
+            log.info(s"(ready) network built and ready to run; id: $id; timeFactor: $timeFactor; kafka-settings: $kafkaSettings")
+            context.become(built(outgoingMessageActor, networkResults, consumerControl, seriesRunner))
+
+          case _ => log.error(s"(ready) invalid message for ready-state; id: $id; message: $text")
         }
 
-        log.info(s"(ready) network built and ready to run; id: $id; kafka-settings: $kafkaSettings")
-        context.become(built(outgoingMessageActor, networkResults, consumerControl, seriesRunner))
+        // failed to parse the JSON message, so it must be the old-style build command
+        case Failure(exception) => text.replaceAll("\"", "") match {
+          case BUILD_COMMAND.name =>
+            log.info(s"(ready) building network commander; id: $id; time-factor: 1 [old style build]")
 
-      case command => log.error(s"(ready) Invalid network command; command: $command")
-    }
-    //    case IncomingMessage(text) => text.parseJson.convertTo match {
-    //      case NetworkCommand(BUILD_COMMAND.name) =>
-    //        log.info(s"(ready) building network commander; id: $id")
-    //
-    //        // build the network
-    //        val networkResults = seriesRunner.createNetworks(num = 1, description = networkDescription, reparseReport = false)
-    //        if (networkResults.hasFailures) {
-    //          seriesRunner.logger.error(s"Failed to create all networks; failures: ${networkResults.failures.mkString}")
-    //        }
-    //
-    //        log.info(s"(ready) network built and ready to run; id: $id; kafka-settings: $kafkaSettings")
-    //        context.become(built(outgoingMessageActor, networkResults, consumerControl, seriesRunner))
-    //
-    //      case NetworkCommand(command) => log.error(s"(ready) Invalid network command; command: $command")
-    //    }
+            val seriesRunner = new SeriesRunner(
+              timeFactor = 1,
+              appLoggerName = "spikes-network-server",
+              config = serverConfig,
+              systemBaseName = networkCommanderId,
+              eventLogging = Seq(KafkaEventLogging(topic = seriesNumber => s"$networkCommanderId-$seriesNumber"))
+            )
+
+            // build the network
+            val networkResults = seriesRunner.createNetworks(num = 1, networkDescription, reparseReport = false)
+            if (networkResults.hasFailures) {
+              seriesRunner.logger.error(s"Failed to create all networks; failures: ${networkResults.failures.mkString}")
+            }
+
+            log.info(s"(ready) network built and ready to run; id: $id; timeFactor: 1 [old style build]; kafka-settings: $kafkaSettings")
+            context.become(built(outgoingMessageActor, networkResults, consumerControl, seriesRunner))
+        }
+
+        case command => log.error(s"(ready) Invalid network command; id: $id; command: $command")
+      }
   }
 
   /**
@@ -145,64 +173,54 @@ class NetworkCommander(id: String,
     * @param seriesRunner         The spikes network runner that runs the simulation
     * @return a receive instance
     */
-  def built(outgoingMessageActor: ActorRef,
-            networkResults: SeriesRunner.CreateNetworkResults,
-            consumerControl: Consumer.Control,
-            seriesRunner: SeriesRunner
+  def built(
+             outgoingMessageActor: ActorRef,
+             networkResults: SeriesRunner.CreateNetworkResults,
+             consumerControl: Consumer.Control,
+             seriesRunner: SeriesRunner
            ): Receive = {
-    case IncomingMessage(text) => text.replaceAll("\"", "") match {
-      case BUILD_COMMAND.name =>
-        log.info(s"(built) Network built and ready to start; id: $id")
 
-      // todo add a case statement for adding/removing sensors (in the "running" state, messages
-      //    from the sensors will be processed. calls the series runner to add a sensor
+    case IncomingMessage(text) =>
+      import com.digitalcipher.spiked.json.SensorJsonSupport._
+      import spray.json._
 
-      case START_COMMAND.name =>
-        log.info(s"(built) starting network; id: $id; kafka-settings: $kafkaSettings")
+      Try(JsonParser(cleanJson(text))) match {
+        case Success(value) => Try(value.convertTo[StartNetworkMessage]) match {
 
-        // todo move code to create the environment factory outside of this function/class
-        //    so that it can be configured by the UI
-        // create the environment factory using the signal-function factory
-        val environmentFactory = PeriodicEnvironmentFactory(
-          initialDelay = Milliseconds(0),
-          signalPeriod = Milliseconds(50),
-          simulationDuration = Seconds(50),
-          signalsFunction = randomNeuronSignalGeneratorFunction(Milliseconds(25))
-        )
+          // successfully parsed JSON start-network message message with the sensor description
+          case Success(StartNetworkMessage(name, selector)) =>
+            log.info(s"(built) adding sensor to network; id: $id; sensor_name: $name; selector: ${selector.regex}")
+            val sensorResult = seriesRunner.addSensor(name, selector, networkResults.successes)
+            val result = Await.result(sensorResult, Duration(1, TimeUnit.SECONDS))
+            log.info(s"(built) added sensor to network; id: $id; sensor_name: $name; neurons: ${result.head.neuronIds.toString()}")
 
-        // todo the input selector needs to be passed in (configured from the UI)
-        // run the simulation, which will end after the time specified in the environment factory
-        seriesRunner.runSimulationSeries(
-          networkResults = networkResults.successes,
-          environmentFactory = environmentFactory,
-          inputNeuronSelector = """(in\-[1-7]$)""".r
-        )
-        // todo ---- end
+            log.info(s"(built) starting network; id: $id; kafka-settings: $kafkaSettings")
+            val systemNames = networkResults.successes.map(result => result.system.name)
+            if (seriesRunner.hasSensors(systemNames)) {
+              // reset all the sensor clocks to "now"
+              val startTime = System.currentTimeMillis()
+              seriesRunner.runSimulationSeries(networkResults.successes)
 
-        log.info(s"(built) started simulation; id: $id")
+              log.info(s"(built) started simulation; id: $id; sensors: ${seriesRunner.hasSensors(systemNames)}")
 
-        // transition to the running state
-        context.become(running(outgoingMessageActor, System.currentTimeMillis(), consumerControl, networkResults, seriesRunner))
+              // transition to the running state
+              context.become(running(outgoingMessageActor, startTime, consumerControl, networkResults, seriesRunner))
+            } else {
+              log.error(s"(built) cannot start simulation because no sensors have been created")
+            }
+          case _ => log.error(s"(built) invalid message for built state; id: $id; message: $text")
+        }
 
-      case command =>
-        log.error(s"(built) Invalid network command; command: $command")
-    }
-    //    case IncomingMessage(text) => text.parseJson.convertTo match {
-    //      case NetworkCommand(BUILD_COMMAND.name) =>
-    //        log.info(s"(built) Network built and ready to start; id: $id")
-    //
-    //      case NetworkCommand(START_COMMAND.name) =>
-    //        log.info(s"(built) starting network; id: $id; kafka-settings: $kafkaSettings")
-    //
-    //        // todo start the simulation
-    //        //        seriesRunner.runSimulationSeries(networkResults, , )
-    //
-    //        // transition to the running state
-    //        context.become(running(outgoingMessageActor, System.currentTimeMillis(), consumerControl, networkResults, seriesRunner))
-    //
-    //      case NetworkCommand(command) =>
-    //        log.error(s"(built) Invalid network command; command: $command")
-    //    }
+        // failed to parse the JSON message, so it must be one of the commands to build or start
+        // the network
+        case Failure(exception) => text.replaceAll("\"", "") match {
+          case BUILD_COMMAND.name =>
+            log.info(s"(built) Network built and ready to start; id: $id")
+        }
+
+        case command =>
+          log.error(s"(built) Invalid network command; command: $command")
+      }
 
     case DestroyNetwork() =>
       log.info(s"(built) destroying network; id: $id")
@@ -218,7 +236,7 @@ class NetworkCommander(id: String,
       // suicide
       self ! PoisonPill
 
-    case _ => log.error(s"Invalid incoming message type")
+    case _ => log.error(s"(built) Invalid incoming message type")
   }
 
   /**
@@ -230,43 +248,39 @@ class NetworkCommander(id: String,
     *                             that is completed once the simulation is stopped or completed
     * @return a receive instance
     */
-  def running(outgoingMessageActor: ActorRef,
-              startTime: Long,
-              consumerControl: Consumer.Control,
-              networkResults: SeriesRunner.CreateNetworkResults,
-              seriesRunner: SeriesRunner
-             ): Receive = {
+  def running(
+               outgoingMessageActor: ActorRef,
+               startTime: Long,
+               consumerControl: Consumer.Control,
+               networkResults: SeriesRunner.CreateNetworkResults,
+               seriesRunner: SeriesRunner): Receive = {
 
     case SimulationStopped() =>
       log.info(s"(running) simulation completed; id: $id")
       consumerControl.stop()
       context.become(built(outgoingMessageActor, networkResults, consumerControl, seriesRunner))
 
-    case IncomingMessage(text) => text.replaceAll("\"", "") match {
+    case IncomingMessage(text) =>
+      import com.digitalcipher.spiked.json.SensorJsonSupport._
+      import spray.json._
+      Try(JsonParser(cleanJson(text)).convertTo[IncomingSignal]) match {
+        case Success(IncomingSignal(sensorName, neuronIds, signal)) =>
+          log.info(s"(running) incoming signal; id: $id; sensor_name: $sensorName; neurons: $neuronIds; signal: $signal")
+          seriesRunner.sendSensorSignal(sensorName, signal, neuronIds, networkResults.successes.map(result => result.system))
 
-      // todo add a case statement for incoming signals which calls the series-runner to send
-      //    a message to all the neurons in the incoming signals message
+        case _ => text.replaceAll("\"", "") match {
 
-      case STOP_COMMAND.name =>
-        log.info(s"(running) stopping network; id: $id")
-        consumerControl.stop()
-        context.become(built(outgoingMessageActor, networkResults, consumerControl, seriesRunner))
+          case STOP_COMMAND.name =>
+            log.info(s"(running) stopping network; id: $id")
+            consumerControl.stop()
+            context.become(built(outgoingMessageActor, networkResults, consumerControl, seriesRunner))
 
-      case command => log.error(s"(running) Invalid network command; command: $command")
-    }
-    //    case IncomingMessage(text) => text.parseJson.convertTo match {
-    //
-    //        case NetworkCommand(STOP_COMMAND.name) =>
-    //          log.info(s"(running) stopping network; id: $id")
-    //          consumerControl.stop()
-    //          context.become(built(outgoingMessageActor, networkResults, consumerControl, seriesRunner))
-    //
-    //        case NetworkCommand(command) => log.error(s"(running) Invalid network command; command: $command")
-    //      }
+          case command => log.error(s"(running) Invalid network command; command: $command")
+        }
+      }
 
     case message => log.error(s"(running) Invalid message type; message type: ${message.getClass.getName}")
   }
-
 
   private def consumerSettings(networkId: String, kafkaSettings: KafkaSettings): ConsumerSettings[String, String] = {
     ConsumerSettings(kafkaConfig, new StringDeserializer, new StringDeserializer)
@@ -274,6 +288,18 @@ class NetworkCommander(id: String,
       .withGroupId(networkId)
       .withProperty(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest")
   }
+
+  /**
+    * Some 'splainin: currently the ui sends the add-sensor method formatted by JSON.stringify(...)
+    * and so the object comes through as a string where the json has the escaped quotes, for example
+    * `"{\"name\":\"test-sensor\",\"selector\":\"^in-1$\"}"`. this string needs to be converted to a
+    * string-representation of an object, so we need to get rid of the \ characters (escape) and the
+    * leading and trailing quotes.
+    *
+    * @param text The stringified JSON (i.e. javascript JSON.stringify(..))
+    * @return A string-representation of a json object
+    */
+  private def cleanJson(text: String): String = text.replace("\\", "").replaceAll("^\"|\"$", "")
 }
 
 object NetworkCommander {
@@ -285,13 +311,21 @@ object NetworkCommander {
 
   sealed trait NetworkMessage
 
-  case class BuildNetwork(actor: ActorRef, seriesRunner: SeriesRunner)
+  case class BuildNetwork(actor: ActorRef, serverConfig: Config, networkCommanderId: String)
+
+  case class AddSensorMessage(name: String, selector: Regex) extends NetworkMessage
+
+  case class BuildNetworkMessage(timeFactor: Int) extends NetworkMessage
+
+  case class StartNetworkMessage(name: String, selector: Regex) extends NetworkMessage
 
   case class DestroyNetwork()
 
   case class Link(actor: ActorRef)
 
   case class IncomingMessage(text: String) extends NetworkMessage
+
+  case class IncomingSignal(sensorName: String, neuronIds: Seq[String], signal: ElectricPotential)
 
   case class OutgoingMessage(text: String) extends NetworkMessage
 
@@ -318,8 +352,7 @@ object NetworkCommander {
     val props = new Properties()
     props.put(
       AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG,
-      settings.bootstrapServers.map(server => s"${server.host}:${server.port}").asJava
-    )
+      settings.bootstrapServers.map(server => s"${server.host}:${server.port}").asJava)
     props
     //    import scala.collection.JavaConverters._
     //    val props = new Properties()
@@ -358,7 +391,6 @@ object NetworkCommander {
         startTime = time
       }
       Map(neurons(index) -> Millivolts(1.05))
-      //      Map(neurons(random.nextInt(neurons.length)) -> Millivolts(1.05))
     }
   }
 

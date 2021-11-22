@@ -4,3 +4,8 @@ from kafka to spikes-ui for visualization.
 
 ## version history
 See [changes.md](changes.md) for a description of the version history.
+
+## shutting down kafka
+```shell
+$ jps | grep Kafka | awk '{print $1;}' | xargs kill -9
+```

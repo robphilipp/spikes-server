@@ -1,8 +1,8 @@
 package com.digitalcipher.spiked.json
 
-import spray.json.{DefaultJsonProtocol, RootJsonFormat}
+import spray.json.{ DefaultJsonProtocol, RootJsonFormat }
 import akka.http.scaladsl.marshallers.sprayjson.SprayJsonSupport
-import com.digitalcipher.spiked.routes.NetworkManagementRoutes.{CreateNetworkCommander, CreateNetworkCommanderResponse, DeleteNetworkCommanderResponse, KafkaServer, KafkaSettings}
+import com.digitalcipher.spiked.routes.NetworkManagementRoutes.{ CreateNetworkCommander, CreateNetworkCommanderResponse, DeleteNetworkCommanderResponse, KafkaServer, KafkaSettings }
 
 trait NetworkManagementJsonSupport extends SprayJsonSupport with DefaultJsonProtocol {
   /*

@@ -5,10 +5,14 @@ lazy val root = (project in file(".")).
   settings(
     inThisBuild(List(
       organization := "com.example",
-      scalaVersion := "2.12.8"
+      scalaVersion := "2.12.9"
     )),
+    resolvers += Resolver.mavenLocal,
     name := "spikes-server",
     libraryDependencies ++= Seq(
+      // config
+      "com.typesafe" % "config" % "1.4.1",
+
       // akka dependencies
       "com.typesafe.akka" %% "akka-http" % akkaHttpVersion,
       "com.typesafe.akka" %% "akka-http-spray-json" % akkaHttpVersion,
@@ -21,10 +25,12 @@ lazy val root = (project in file(".")).
 //      "ch.qos.logback" % "logback-classic" % "1.2.3",
 
       // kafka
-      "com.typesafe.akka" %% "akka-stream-kafka" % "1.0.5",
+//      "com.typesafe.akka" %% "akka-stream-kafka" % "1.0.5",
+//      "com.typesafe.akka" %% "akka-stream-kafka" % "1.1.0",
+      "com.typesafe.akka" %% "akka-stream-kafka" % "2.0.6",
 
       // core library for building spikes networks
-      "com.digitalcipher.spiked" %% "spikes-core" % "0.0.23-snapshot",
+      "com.digitalcipher.spiked" %% "spikes-core" % "0.0.27-snapshot",
 
       // json serialization/deserialization
       "io.spray" %% "spray-json" % "1.3.5",
